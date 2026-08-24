@@ -1,98 +1,71 @@
-# vinext-starter
+# PromptScope
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+**安全な分析は、よい分解から。**
 
-## Prerequisites
+PromptScopeは、AIを使ったセキュリティ解析に入る前に、タスクの分解と
+Agentへの指示品質を学ぶための教育用トレーナーです。検体・脆弱性・ログを
+題材に、何を観測し、どのコンテキストを渡し、どこで判断を止めるかを
+ローカルで練習できます。
 
-- Node.js `>=22.13.0`
+## 現在の機能
 
-## Quick Start
+- マルウェア解析、脆弱性調査、ログ解析の3演習を切り替え
+- 分割タスクの追加、削除、上下移動、選択
+- タスクタイトル、Agentへの指示、渡すコンテキストの編集
+- 5軸・100点満点のローカル採点と、入力に応じたリアルタイム評価
+- 改善提案と強みの表示
+- 80点以上を合格として「学習を完了」できる状態表示
+
+## 安全上の境界
+
+PromptScopeは教育用プロトタイプです。画面上の演習では、検体を実行したり、
+脆弱性を悪用したり、実環境へ変更を加えたりしません。外部APIへの送信も
+ありません。
+
+採点は入力文を対象にしたローカルのヒューリスティック評価であり、実際の
+セキュリティ判定・脆弱性診断・安全性の保証ではありません。評価結果を
+現実の環境での実行許可やリスク受容の根拠に使わないでください。
+
+## 技術スタック
+
+- React 19 / TypeScript
+- vinext / Vite
+- Cloudflare Sites互換のビルド構成
+- 評価ロジックはブラウザ内で実行（外部サービス依存なし）
+
+## 起動と検証
+
+Node.js `>=22.13.0` を用意してください。
 
 ```bash
 npm install
 npm run dev
-npm run build
+npm test
+npm run lint
 ```
 
-This starter does not use `wrangler.jsonc`.
+`npm run dev` でローカル開発サーバーを起動します。`npm test` はビルドと
+サーバー描画の検証、`npm run lint` は静的チェックを実行します。
 
-## Included Shape
+## 主要ファイル
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+- `app/page.tsx` — 3ペインのワークスペース、タスク編集、採点・完了操作
+- `app/globals.css` — アイボリー基調のレイアウト、レスポンシブ、フォーカス状態
+- `app/layout.tsx` — PromptScopeのmetadataと日本語ドキュメント設定
+- `app/lib/curriculum.ts` — 3演習の説明、環境、初期タスク
+- `app/lib/evaluator.ts` — 5軸のヒューリスティック評価と改善提案
 
-## Workspace Auth Headers
+## 将来、コンテナ実行を追加する場合
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
+実処理を扱う機能を追加する場合は、UIから直接実行できる設計にせず、少なくとも
+次の境界を必須にします。
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+1. **隔離** — ホストや他の実行ジョブから分離した専用サンドボックスで動かす。
+2. **使い捨て** — 実行ごとに新しい環境を作り、終了後に破棄する。永続状態を持たせない。
+3. **通信遮断** — デフォルトでネットワークを無効化し、例外も明示的な許可制にする。
+4. **最小権限** — 非特権ユーザー、読み取り中心、限定したCPU・メモリ・時間で実行する。
+5. **監査** — 入力、イメージ、権限、操作、出力、終了理由を改ざん検知可能な監査ログへ残す。
+6. **承認** — 実行前に対象・目的・範囲・リスクを確認し、人の明示承認と停止手段を要求する。
 
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+これらを満たせない場合は、実行機能を追加せず、現在のシミュレーションと
+読み取り専用の教材に留めます。
