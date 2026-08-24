@@ -1,15 +1,539 @@
-import type { Metadata } from "next";
-import { SkeletonPreview } from "./_sites-preview/SkeletonPreview";
+"use client";
 
-export const metadata: Metadata = {
-  title: "Your site is taking shape",
-  description:
-    "Your first version will appear here automatically when it’s ready.",
-  other: {
-    "codex-preview": "development",
-  },
+import { useMemo, useState } from "react";
+import type { AnalysisStep } from "./lib/evaluator";
+import { evaluatePlan } from "./lib/evaluator";
+import type { ScenarioId } from "./lib/curriculum";
+import { SCENARIOS } from "./lib/curriculum";
+
+type ScenarioRecord = {
+  id: ScenarioId;
+  eyebrow: string;
+  title: string;
+  description: string;
+  goal: string;
+  environment: string;
+  riskLabel: string;
+  duration: string;
+  initialSteps: AnalysisStep[];
 };
 
+type DraftStep = {
+  id: string;
+  title: string;
+  instruction: string;
+  context: string;
+};
+
+type CompletionState = "idle" | "needs-work" | "complete";
+
+const scenarioList = Object.values(SCENARIOS) as ScenarioRecord[];
+
+function getStepValue(step: AnalysisStep, key: string, fallback = "") {
+  const values = step as unknown as Record<string, unknown>;
+  const value = values[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function toDraftStep(step: AnalysisStep, index: number): DraftStep {
+  return {
+    id: getStepValue(step, "id", `step-${index + 1}`),
+    title: getStepValue(step, "title", `分析タスク ${index + 1}`),
+    instruction: getStepValue(step, "instruction", getStepValue(step, "prompt")),
+    context: getStepValue(step, "context", getStepValue(step, "handoff")),
+  };
+}
+
+function toAnalysisSteps(steps: DraftStep[]) {
+  return steps.map((step) => ({
+    id: step.id,
+    title: step.title,
+    instruction: step.instruction,
+    context: step.context,
+  })) as unknown as AnalysisStep[];
+}
+
+function scenarioInitialSteps(scenario: ScenarioRecord) {
+  return scenario.initialSteps.map(toDraftStep);
+}
+
+function scoreTone(score: number) {
+  if (score >= 80) return "good";
+  if (score >= 60) return "mid";
+  return "low";
+}
+
 export default function Home() {
-  return <SkeletonPreview />;
+  const firstScenario =
+    scenarioList.find(
+      (scenario) =>
+        /malware|マルウェア|マルウエア/i.test(
+          `${String(scenario.id)} ${scenario.title}`,
+        ),
+    ) ?? scenarioList[0];
+
+  const [scenarioId, setScenarioId] = useState<ScenarioId>(
+    () => firstScenario?.id ?? ("malware" as ScenarioId),
+  );
+  const activeScenario =
+    scenarioList.find((scenario) => scenario.id === scenarioId) ?? firstScenario;
+  const [steps, setSteps] = useState<DraftStep[]>(() =>
+    firstScenario ? scenarioInitialSteps(firstScenario) : [],
+  );
+  const [selectedStepId, setSelectedStepId] = useState<string>(() => {
+    if (!firstScenario?.initialSteps[0]) return "";
+    return toDraftStep(firstScenario.initialSteps[0], 0).id;
+  });
+  const [isScored, setIsScored] = useState(false);
+  const [liveMessage, setLiveMessage] = useState(
+    "入力すると計画の評価がリアルタイムに更新されます。",
+  );
+  const [completionState, setCompletionState] = useState<CompletionState>("idle");
+
+  const evaluation = useMemo(
+    () =>
+      activeScenario
+        ? evaluatePlan(activeScenario.title, toAnalysisSteps(steps))
+        : { total: 0, criteria: [], strengths: [], improvements: [] },
+    [activeScenario, steps],
+  );
+
+  if (!activeScenario) {
+    return (
+      <main className="empty-app">
+        <p className="mono-label">PROMPT SCOPE / 00</p>
+        <h1>演習を読み込めませんでした。</h1>
+      </main>
+    );
+  }
+
+  const score = Math.round(evaluation.total);
+  const passed = score >= 80;
+
+  function updateStep(
+    stepId: string,
+    field: keyof Omit<DraftStep, "id">,
+    value: string,
+  ) {
+    setSteps((current) =>
+      current.map((step) =>
+        step.id === stepId ? { ...step, [field]: value } : step,
+      ),
+    );
+    setCompletionState("idle");
+  }
+
+  function switchScenario(nextScenario: ScenarioRecord) {
+    const nextSteps = scenarioInitialSteps(nextScenario);
+    setScenarioId(nextScenario.id);
+    setSteps(nextSteps);
+    setSelectedStepId(nextSteps[0]?.id ?? "");
+    setIsScored(false);
+    setCompletionState("idle");
+    setLiveMessage("演習を切り替えました。入力すると計画の評価が更新されます。");
+  }
+
+  function addStep() {
+    const nextId = `step-${Date.now()}`;
+    const nextStep: DraftStep = {
+      id: nextId,
+      title: "新しい分析タスク",
+      instruction: "何を確認し、どんな観測結果を返すかを具体的に書く。",
+      context: "前のタスクの観測結果と、このタスクで必要な前提を渡す。",
+    };
+    setSteps((current) => [...current, nextStep]);
+    setSelectedStepId(nextId);
+    setCompletionState("idle");
+    setLiveMessage("新しい分析タスクを追加しました。");
+  }
+
+  function removeStep(stepId: string) {
+    if (steps.length <= 1) {
+      setLiveMessage("計画には最低1つの分析タスクを残してください。");
+      return;
+    }
+    const removedIndex = steps.findIndex((step) => step.id === stepId);
+    const nextSteps = steps.filter((step) => step.id !== stepId);
+    setSteps(nextSteps);
+    if (stepId === selectedStepId) {
+      const replacement = nextSteps[Math.min(removedIndex, nextSteps.length - 1)];
+      setSelectedStepId(replacement?.id ?? "");
+    }
+    setCompletionState("idle");
+    setLiveMessage("分析タスクを削除しました。");
+  }
+
+  function moveStep(stepId: string, direction: -1 | 1) {
+    setSteps((current) => {
+      const index = current.findIndex((step) => step.id === stepId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
+      return next;
+    });
+    setSelectedStepId(stepId);
+    setCompletionState("idle");
+  }
+
+  function scorePlan() {
+    setIsScored(true);
+    setLiveMessage(
+      `計画を採点しました。総合スコアは ${score} 点です。${passed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
+    );
+  }
+
+  function completeLearning() {
+    if (passed) {
+      setCompletionState("complete");
+      setLiveMessage("学習を完了しました。安全な分析計画を組み立てられています。");
+    } else {
+      setCompletionState("needs-work");
+      setLiveMessage(
+        `まだ学習途中です。合格点の80点まで、${80 - score}点分の改善を試してみましょう。`,
+      );
+    }
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-lockup" aria-label="PromptScope">
+          <span className="brand-mark" aria-hidden="true">PS</span>
+          <span className="brand-name">PromptScope</span>
+          <span className="brand-rule" aria-hidden="true" />
+          <span className="brand-tagline">安全な分析は、よい分解から。</span>
+        </div>
+        <div className="topbar-meta">
+          <span className="local-indicator" aria-hidden="true" />
+          <span>学習モード</span>
+          <span className="slash" aria-hidden="true">/</span>
+          <span className="mono-label">LOCAL ONLY</span>
+        </div>
+      </header>
+
+      <div className="workspace-grid">
+        <aside className="left-column" aria-label="演習選択と学習の焦点">
+          <div className="column-intro">
+            <p className="mono-label">01 / EXERCISES</p>
+            <h2>演習を選ぶ</h2>
+            <p className="column-description">危険な処理を実行せず、分解の仕方だけを練習します。</p>
+          </div>
+
+          <nav className="scenario-nav" aria-label="演習一覧">
+            {scenarioList.map((scenario, index) => {
+              const isActive = scenario.id === activeScenario.id;
+              return (
+                <button
+                  className={`scenario-item${isActive ? " is-active" : ""}`}
+                  key={String(scenario.id)}
+                  type="button"
+                  aria-current={isActive ? "page" : undefined}
+                  onClick={() => switchScenario(scenario)}
+                >
+                  <span className="scenario-index">0{index + 1}</span>
+                  <span className="scenario-copy">
+                    <span className="scenario-eyebrow">{scenario.eyebrow}</span>
+                    <span className="scenario-title">{scenario.title}</span>
+                  </span>
+                  <span className="scenario-arrow" aria-hidden="true">↗</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <section className="focus-note" aria-labelledby="focus-heading">
+            <div className="focus-heading-row">
+              <p className="mono-label">LEARNING FOCUS</p>
+              <span className="focus-pin" aria-hidden="true">✳</span>
+            </div>
+            <h2 id="focus-heading">学習の焦点</h2>
+            <ol className="focus-list">
+              <li><span>01</span><p>目的と完了条件を先に置く</p></li>
+              <li><span>02</span><p>観測と判断を別のタスクに分ける</p></li>
+              <li><span>03</span><p>権限・入力・出力の境界を明記する</p></li>
+            </ol>
+          </section>
+
+          <div className="left-footer">
+            <span className="safety-stamp">NO EXECUTION</span>
+            <p>教育用プロトタイプ<br />実処理・API通信はありません</p>
+          </div>
+        </aside>
+
+        <section className="center-column" aria-labelledby="workspace-title">
+          <div className="task-overview">
+            <div className="overview-heading">
+              <div>
+                <p className="mono-label accent-label">{activeScenario.eyebrow}</p>
+                <h1 id="workspace-title">{activeScenario.title}</h1>
+              </div>
+              <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>
+            </div>
+            <p className="overview-description">{activeScenario.description}</p>
+            <div className="overview-meta" aria-label="演習の概要">
+              <div className="meta-block">
+                <span className="mono-label">GOAL</span>
+                <strong>{activeScenario.goal}</strong>
+              </div>
+              <div className="meta-block">
+                <span className="mono-label">ENVIRONMENT</span>
+                <strong>{activeScenario.environment}</strong>
+              </div>
+              <div className="meta-block meta-risk">
+                <span className="mono-label">RISK / TIME</span>
+                <strong><span>{activeScenario.riskLabel}</span><span className="meta-separator">·</span>{activeScenario.duration}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="progress-section">
+            <div className="section-heading">
+              <div>
+                <p className="mono-label">02 / DECOMPOSE</p>
+                <h2>分解の進捗</h2>
+              </div>
+              <span className="progress-count">{String(steps.length).padStart(2, "0")} TASKS</span>
+            </div>
+            <ol className="progress-rail" aria-label="分析タスクの順序">
+              {steps.map((step, index) => (
+                <li className={step.id === selectedStepId ? "is-current" : ""} key={step.id}>
+                  <button
+                    type="button"
+                    aria-label={`${index + 1}番目のタスク「${step.title || "無題"}」を選択`}
+                    aria-current={step.id === selectedStepId ? "step" : undefined}
+                    onClick={() => setSelectedStepId(step.id)}
+                  >
+                    <span className="rail-number">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="rail-title">{step.title || "無題のタスク"}</span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <div className="task-list-heading">
+            <div>
+              <p className="mono-label">TASK PLAN</p>
+              <h2>分析タスク</h2>
+            </div>
+            <p className="helper-copy">安全な順序と、Agentに渡す境界を設計します。</p>
+          </div>
+
+          <div className="task-list" aria-label="編集可能な分析タスク">
+            {steps.length === 0 ? (
+              <div className="empty-tasks">
+                <p className="mono-label">NO TASKS YET</p>
+                <p>最初の分析タスクを追加して計画を始めましょう。</p>
+                <button className="button button-secondary" type="button" onClick={addStep}>＋ タスクを追加</button>
+              </div>
+            ) : (
+              steps.map((step, index) => {
+                const isSelected = step.id === selectedStepId;
+                return (
+                  <article
+                    className={`task-card${isSelected ? " is-selected" : ""}`}
+                    key={step.id}
+                    tabIndex={0}
+                    aria-label={`${index + 1}番目の分析タスク`}
+                    onClick={() => setSelectedStepId(step.id)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === "ArrowUp" && index > 0) {
+                        event.preventDefault();
+                        moveStep(step.id, -1);
+                      }
+                      if (event.key === "ArrowDown" && index < steps.length - 1) {
+                        event.preventDefault();
+                        moveStep(step.id, 1);
+                      }
+                    }}
+                  >
+                    <div className="task-card-header">
+                      <button
+                        className="task-card-select"
+                        type="button"
+                        aria-pressed={isSelected}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedStepId(step.id);
+                        }}
+                      >
+                        <span className="task-number">{String(index + 1).padStart(2, "0")}</span>
+                        <span className="task-state">{isSelected ? "編集中" : "待機中"}</span>
+                      </button>
+                      <div className="task-actions" aria-label={`${index + 1}番目のタスク操作`}>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="タスクを上へ移動"
+                          disabled={index === 0}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            moveStep(step.id, -1);
+                          }}
+                        >↑</button>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          aria-label="タスクを下へ移動"
+                          disabled={index === steps.length - 1}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            moveStep(step.id, 1);
+                          }}
+                        >↓</button>
+                        <button
+                          className="icon-button icon-button-danger"
+                          type="button"
+                          aria-label="タスクを削除"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeStep(step.id);
+                          }}
+                        >×</button>
+                      </div>
+                    </div>
+
+                    <div className="task-card-body">
+                      <div className="field field-title">
+                        <label htmlFor={`task-title-${step.id}`}>タスクタイトル</label>
+                        <input
+                          id={`task-title-${step.id}`}
+                          value={step.title}
+                          onFocus={() => setSelectedStepId(step.id)}
+                          onChange={(event) => updateStep(step.id, "title", event.target.value)}
+                          placeholder="例：入力ファイルの由来を確認する"
+                        />
+                      </div>
+                      <div className="task-fields-grid">
+                        <div className="field">
+                          <label htmlFor={`task-instruction-${step.id}`}>
+                            <span className="field-index">A</span>Agentへの指示
+                          </label>
+                          <textarea
+                            id={`task-instruction-${step.id}`}
+                            value={step.instruction}
+                            onFocus={() => setSelectedStepId(step.id)}
+                            onChange={(event) => updateStep(step.id, "instruction", event.target.value)}
+                            rows={4}
+                            placeholder="対象、観察ポイント、禁止事項、期待する出力形式を書く"
+                          />
+                          <span className="field-hint">何をするか / 何をしないか</span>
+                        </div>
+                        <div className="field">
+                          <label htmlFor={`task-context-${step.id}`}>
+                            <span className="field-index">B</span>渡すコンテキスト
+                          </label>
+                          <textarea
+                            id={`task-context-${step.id}`}
+                            value={step.context}
+                            onFocus={() => setSelectedStepId(step.id)}
+                            onChange={(event) => updateStep(step.id, "context", event.target.value)}
+                            rows={4}
+                            placeholder="前段の観測結果、既知の制約、利用可能な資料を書く"
+                          />
+                          <span className="field-hint">何を知っているか / 何が必要か</span>
+                        </div>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
+
+          <button className="add-task-button" type="button" onClick={addStep}>
+            <span className="add-symbol" aria-hidden="true">＋</span>
+            <span><strong>分析タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+          </button>
+
+          <p className="keyboard-note"><span aria-hidden="true">⌘</span> フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
+        </section>
+
+        <aside className={`right-column${isScored ? " is-scored" : ""}`} aria-label="計画の評価">
+          <div className="score-panel-header">
+            <div>
+              <p className="mono-label">03 / REVIEW</p>
+              <h2>計画の評価</h2>
+            </div>
+            <span className="live-badge">LIVE</span>
+          </div>
+
+          <div className={`score-summary score-${scoreTone(score)}`} aria-live="polite" aria-atomic="true">
+            <div className="score-label-row">
+              <span>総合スコア</span>
+              <span className="score-status">{passed ? "PASS / 目標達成" : "DRAFT / 改善中"}</span>
+            </div>
+            <div className="score-value"><strong>{score}</strong><span>/ 100</span></div>
+            <div className="score-track" aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(score, 100))}%` }} /></div>
+            <p className="score-caption">{passed ? "安全な分析の骨格ができています。" : "入力を磨くと評価がリアルタイムに上がります。"}</p>
+          </div>
+
+          <div className="criteria-block">
+            <div className="subsection-heading">
+              <span className="mono-label">EVALUATION AXES</span>
+              <span className="criteria-count">{evaluation.criteria.length} AXES</span>
+            </div>
+            <div className="criteria-list">
+              {evaluation.criteria.map((criterion) => {
+                const criterionScore = Math.round(criterion.score);
+                const criterionMax = Math.max(criterion.max, 1);
+                const percent = Math.max(0, Math.min(100, (criterionScore / criterionMax) * 100));
+                return (
+                  <div className="criterion" key={criterion.label}>
+                    <div className="criterion-heading">
+                      <span>{criterion.label}</span>
+                      <strong>{criterionScore}<small>/{criterion.max}</small></strong>
+                    </div>
+                    <div className="criterion-track" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>
+                    <p>{criterion.message}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="feedback-block">
+            <div className="subsection-heading">
+              <span className="mono-label">NEXT ITERATION</span>
+              <span className="feedback-mark" aria-hidden="true">↗</span>
+            </div>
+            <ul className="feedback-list">
+              {evaluation.improvements.length > 0 ? evaluation.improvements.slice(0, 3).map((improvement) => (
+                <li key={improvement}><span aria-hidden="true">＋</span>{improvement}</li>
+              )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
+            </ul>
+            {evaluation.strengths.length > 0 && (
+              <p className="strength-note"><span aria-hidden="true">✳</span>{evaluation.strengths[0]}</p>
+            )}
+          </div>
+
+          <div className="score-actions">
+            <button className="button button-score" type="button" onClick={scorePlan}>
+              <span>この計画を採点</span><span aria-hidden="true">→</span>
+            </button>
+            <button
+              className={`button button-complete${completionState === "complete" ? " is-complete" : ""}`}
+              type="button"
+              onClick={completeLearning}
+            >
+              <span>{completionState === "complete" ? "学習を完了しました" : "学習を完了"}</span>
+              <span aria-hidden="true">{completionState === "complete" ? "✓" : "↗"}</span>
+            </button>
+            {completionState === "needs-work" && (
+              <p className="completion-note" role="status">合格点は80点です。右の提案から計画を改善しましょう。</p>
+            )}
+          </div>
+          <p className="live-region" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
+          <p className="right-footnote">評価は入力内容からローカルに算出されます。<br />実行結果や外部通信は扱いません。</p>
+        </aside>
+      </div>
+
+      <footer className="app-footer">
+        <span>PromptScope / ANALYSIS INSTRUCTION TRAINER</span>
+        <span>v0.1 · LOCAL EDUCATIONAL PROTOTYPE</span>
+      </footer>
+    </main>
+  );
 }
