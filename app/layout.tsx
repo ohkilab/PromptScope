@@ -16,10 +16,6 @@ export const metadata: Metadata = {
   title: "PromptScope — 安全な分析は、よい分解から。",
   description:
     "AIセキュリティ解析の指示を、安全な分解から学ぶインタラクティブ・トレーナー。",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
 };
 
 export default function RootLayout({
