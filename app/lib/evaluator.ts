@@ -46,16 +46,27 @@ type NormalizedStep = {
   instruction: string;
   context: string;
   text: string;
+  hasMeaningfulTitle: boolean;
+  hasSubstantiveInstruction: boolean;
+  hasSubstantiveContext: boolean;
+  actionCount: number;
 };
 
 type PlanSnapshot = {
   title: string;
   steps: NormalizedStep[];
   text: string;
+  authoredText: string;
+  meaningfulTitleText: string;
+  instructionText: string;
+  contextText: string;
   nonEmptySteps: NormalizedStep[];
   titleCoverage: number;
   instructionCoverage: number;
   contextCoverage: number;
+  meaningfulTitleCoverage: number;
+  substantiveInstructionCoverage: number;
+  substantiveContextCoverage: number;
   averageInstructionLength: number;
   averageActionCount: number;
   hasRepeatedStepIds: boolean;
@@ -145,6 +156,12 @@ const FORMAT_PATTERNS: readonly RegExp[] = [
 
 const ACTION_PATTERN =
   /確認|取得|抽出|収集|解析|分析|比較|分類|記録|生成|報告|検証|評価|特定|検出|整理|実行|送信|変更|削除|判定/gi;
+
+const TITLE_ACTION_PATTERN =
+  /確認|取得|抽出|収集|解析|分析|比較|分類|記録|生成|報告|検証|評価|特定|検出|整理|調査|作成|切り分け|洗い出し|仮説化/i;
+
+const GENERIC_TITLE_PATTERN =
+  /^(?:確認|調査|作業|対応|分析|解析|整理|判定|記録|報告|検証|タスク|手順|ステップ|todo|test|aaa|bbb|ccc)$/i;
 
 const ISOLATION_PATTERNS: readonly RegExp[] = [
   /隔離|サンドボックス|sandbox|コンテナ|使い捨て|複製環境|専用環境/i,
@@ -249,6 +266,36 @@ function countMatches(text: string, pattern: RegExp): number {
   return text.match(new RegExp(pattern.source, flags))?.length ?? 0;
 }
 
+function hasJapaneseText(text: string): boolean {
+  return /[ぁ-んァ-ン一-龯]/.test(text);
+}
+
+function hasContextSignal(text: string): boolean {
+  return (
+    includesAny(text, TARGET_PATTERNS) ||
+    includesAny(text, EXPLICIT_PURPOSE_PATTERNS) ||
+    includesAny(text, EXPLICIT_INPUT_PATTERNS) ||
+    includesAny(text, CONSTRAINT_PATTERNS)
+  );
+}
+
+function isMeaningfulTitle(text: string): boolean {
+  return (
+    text.length >= 4 &&
+    hasJapaneseText(text) &&
+    !GENERIC_TITLE_PATTERN.test(text) &&
+    (TITLE_ACTION_PATTERN.test(text) || hasContextSignal(text))
+  );
+}
+
+function isSubstantiveInstruction(text: string): boolean {
+  return text.length >= 16 && hasJapaneseText(text) && countMatches(text, ACTION_PATTERN) > 0;
+}
+
+function isSubstantiveContext(text: string): boolean {
+  return text.length >= 12 && hasJapaneseText(text) && hasContextSignal(text);
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -305,14 +352,26 @@ function createSnapshot(taskTitle: string, steps: AnalysisStep[]): PlanSnapshot 
     const titleText = normalizeText(step?.title ?? "");
     const instruction = normalizeText(step?.instruction ?? "");
     const context = normalizeText(step?.context ?? "");
+    const actionCount = countMatches(instruction, ACTION_PATTERN);
     return {
       title: titleText,
       instruction,
       context,
       text: [titleText, instruction, context].filter(Boolean).join(" "),
+      hasMeaningfulTitle: isMeaningfulTitle(titleText),
+      hasSubstantiveInstruction: isSubstantiveInstruction(instruction),
+      hasSubstantiveContext: isSubstantiveContext(context),
+      actionCount,
     };
   });
   const nonEmptySteps = normalizedSteps.filter((step) => step.text.length > 0);
+  const meaningfulTitleText = normalizedSteps
+    .filter((step) => step.hasMeaningfulTitle)
+    .map((step) => step.title)
+    .join(" ");
+  const instructionText = normalizedSteps.map((step) => step.instruction).filter(Boolean).join(" ");
+  const contextText = normalizedSteps.map((step) => step.context).filter(Boolean).join(" ");
+  const authoredText = [meaningfulTitleText, instructionText, contextText].filter(Boolean).join(" ");
   const text = [title, ...normalizedSteps.map((step) => step.text)]
     .filter(Boolean)
     .join(" ");
@@ -323,27 +382,36 @@ function createSnapshot(taskTitle: string, steps: AnalysisStep[]): PlanSnapshot 
     title,
     steps: normalizedSteps,
     text,
+    authoredText,
+    meaningfulTitleText,
+    instructionText,
+    contextText,
     nonEmptySteps,
     titleCoverage: normalizedSteps.filter((step) => step.title.length > 0).length / safeCount,
     instructionCoverage:
       normalizedSteps.filter((step) => step.instruction.length > 0).length / safeCount,
     contextCoverage: normalizedSteps.filter((step) => step.context.length > 0).length / safeCount,
+    meaningfulTitleCoverage:
+      normalizedSteps.filter((step) => step.hasMeaningfulTitle).length / safeCount,
+    substantiveInstructionCoverage:
+      normalizedSteps.filter((step) => step.hasSubstantiveInstruction).length / safeCount,
+    substantiveContextCoverage:
+      normalizedSteps.filter((step) => step.hasSubstantiveContext).length / safeCount,
     averageInstructionLength:
       normalizedSteps.reduce((sum, step) => sum + step.instruction.length, 0) / safeCount,
     averageActionCount:
-      normalizedSteps.reduce((sum, step) => sum + countMatches(step.instruction, ACTION_PATTERN), 0) /
-      safeCount,
+      normalizedSteps.reduce((sum, step) => sum + step.actionCount, 0) / safeCount,
     hasRepeatedStepIds: hasRepeatedIds(normalizedSteps, sourceSteps),
   };
 }
 
 function detectContextSignals(snapshot: PlanSnapshot): ContextSignals {
-  const text = snapshot.text;
+  const text = snapshot.authoredText;
   return {
     target: includesAny(text, TARGET_PATTERNS),
     purpose: includesAny(text, EXPLICIT_PURPOSE_PATTERNS),
     procedure:
-      snapshot.nonEmptySteps.length > 1 ||
+      snapshot.steps.filter((step) => step.hasMeaningfulTitle || step.hasSubstantiveInstruction).length > 1 ||
       includesAny(text, EXPLICIT_PROCEDURE_PATTERNS) ||
       snapshot.averageActionCount >= 2,
     inputEvidence: includesAny(text, EXPLICIT_INPUT_PATTERNS),
@@ -355,45 +423,60 @@ function scoreGranularity(snapshot: PlanSnapshot): number {
   const count = snapshot.steps.length;
   if (count === 0 || snapshot.nonEmptySteps.length === 0) return 0;
 
-  let score: number;
-  if (count === 1) score = 3;
-  else if (count <= 8) score = 10;
-  else if (count <= 12) score = 7;
-  else if (count <= 16) score = 4;
-  else score = 1;
+  let score = 0;
+  if (count === 1) score += 2;
+  else if (count <= 8) score += 6;
+  else if (count <= 12) score += 4;
+  else if (count <= 16) score += 2;
+  else score += 1;
 
-  score += snapshot.titleCoverage * 4;
-  score += snapshot.instructionCoverage * 6;
-  score += snapshot.contextCoverage * 2;
+  score += snapshot.meaningfulTitleCoverage * 4;
+  score += snapshot.substantiveInstructionCoverage * 9;
+  score += snapshot.substantiveContextCoverage * 3;
 
   if (snapshot.averageInstructionLength >= 30 && snapshot.averageInstructionLength <= 420) {
-    score += 3;
+    score += 2;
   } else if (snapshot.averageInstructionLength >= 16) {
     score += 1;
   } else {
     score -= 2;
   }
 
-  if (snapshot.averageActionCount >= 1 && snapshot.averageActionCount <= 4) score += 3;
+  if (snapshot.averageActionCount >= 1 && snapshot.averageActionCount <= 4) score += 1;
   else if (snapshot.averageActionCount > 4) score -= 2;
   else score -= 2;
 
-  if (count >= 2 && !snapshot.hasRepeatedStepIds) score += 1;
+  if (count >= 2 && snapshot.meaningfulTitleCoverage >= 0.75 && !snapshot.hasRepeatedStepIds) score += 1;
   if (count === 1) score -= 2;
   if (count > 12) score -= 2;
+  if (snapshot.substantiveContextCoverage === 0) score = Math.min(score, 18);
 
   return roundedScore(score, 25);
 }
 
 function scoreContext(snapshot: PlanSnapshot, signals: ContextSignals): number {
-  if (snapshot.text.length === 0) return 0;
+  if (snapshot.authoredText.length === 0) return 0;
+
+  const primaryText = [snapshot.instructionText, snapshot.contextText].filter(Boolean).join(" ");
+  const titleText = snapshot.meaningfulTitleText;
+  const scoreSignal = (patterns: readonly RegExp[] | RegExp, fullScore: number, titleScore: number) => {
+    if (includesAny(primaryText, patterns)) return fullScore;
+    if (includesAny(titleText, patterns)) return titleScore;
+    return 0;
+  };
 
   let score = 0;
-  if (signals.target) score += 6;
-  if (signals.purpose) score += 5;
-  if (signals.inputEvidence) score += 6;
-  if (signals.procedure) score += 4;
-  if (signals.scopeConstraints) score += 4;
+  score += scoreSignal(TARGET_PATTERNS, 5, 2);
+  score += scoreSignal(EXPLICIT_PURPOSE_PATTERNS, 5, 1);
+  score += scoreSignal(EXPLICIT_INPUT_PATTERNS, 5, 1);
+  score += scoreSignal(CONSTRAINT_PATTERNS, 5, 0);
+  if (snapshot.substantiveContextCoverage >= 0.75) {
+    score += 5;
+  } else if (snapshot.substantiveContextCoverage > 0) {
+    score += 2;
+  } else if (signals.procedure && snapshot.meaningfulTitleCoverage >= 0.75) {
+    score += 1;
+  }
   return roundedScore(score, 25);
 }
 
