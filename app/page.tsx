@@ -29,7 +29,16 @@ type DraftStep = {
 
 type CompletionState = "idle" | "needs-work" | "complete";
 
+type ScenarioDraftState = {
+  steps: DraftStep[];
+  selectedStepId: string;
+  scoredEvaluation: PlanEvaluation | null;
+  hasUnscoredChanges: boolean;
+  completionState: CompletionState;
+};
+
 const scenarioList = Object.values(SCENARIOS) as ScenarioRecord[];
+const EMPTY_STEPS: DraftStep[] = [];
 
 function getStepValue(step: AnalysisStep, key: string, fallback = "") {
   const values = step as unknown as Record<string, unknown>;
@@ -59,6 +68,17 @@ function scenarioInitialSteps(scenario: ScenarioRecord) {
   return scenario.initialSteps.map(toDraftStep);
 }
 
+function createScenarioDraft(scenario: ScenarioRecord): ScenarioDraftState {
+  const steps = scenarioInitialSteps(scenario);
+  return {
+    steps,
+    selectedStepId: steps[0]?.id ?? "",
+    scoredEvaluation: null,
+    hasUnscoredChanges: false,
+    completionState: "idle",
+  };
+}
+
 function scoreTone(score: number) {
   if (score >= 80) return "good";
   if (score >= 60) return "mid";
@@ -79,19 +99,20 @@ export default function Home() {
   );
   const activeScenario =
     scenarioList.find((scenario) => scenario.id === scenarioId) ?? firstScenario;
-  const [steps, setSteps] = useState<DraftStep[]>(() =>
-    firstScenario ? scenarioInitialSteps(firstScenario) : [],
+  const [draftsByScenario, setDraftsByScenario] = useState<Partial<Record<ScenarioId, ScenarioDraftState>>>(() =>
+    firstScenario ? { [firstScenario.id]: createScenarioDraft(firstScenario) } : {},
   );
-  const [selectedStepId, setSelectedStepId] = useState<string>(() => {
-    if (!firstScenario?.initialSteps[0]) return "";
-    return toDraftStep(firstScenario.initialSteps[0], 0).id;
-  });
-  const [scoredEvaluation, setScoredEvaluation] = useState<PlanEvaluation | null>(null);
-  const [hasUnscoredChanges, setHasUnscoredChanges] = useState(false);
   const [liveMessage, setLiveMessage] = useState(
     "回答を書き終えたら、計画を採点してください。",
   );
-  const [completionState, setCompletionState] = useState<CompletionState>("idle");
+  const activeDraft = activeScenario
+    ? draftsByScenario[activeScenario.id] ?? createScenarioDraft(activeScenario)
+    : null;
+  const steps = activeDraft?.steps ?? EMPTY_STEPS;
+  const selectedStepId = activeDraft?.selectedStepId ?? "";
+  const scoredEvaluation = activeDraft?.scoredEvaluation ?? null;
+  const hasUnscoredChanges = activeDraft?.hasUnscoredChanges ?? false;
+  const completionState = activeDraft?.completionState ?? "idle";
 
   const evaluation = useMemo(
     () =>
@@ -122,29 +143,51 @@ export default function Home() {
         : "DRAFT / 改善中";
   const summaryTone = displayedScore === null ? "unscored" : scoreTone(displayedScore);
 
+  function updateActiveDraft(
+    update: (current: ScenarioDraftState) => ScenarioDraftState,
+  ) {
+    if (!activeScenario) return;
+    setDraftsByScenario((current) => {
+      const currentDraft = current[activeScenario.id] ?? createScenarioDraft(activeScenario);
+      return {
+        ...current,
+        [activeScenario.id]: update(currentDraft),
+      };
+    });
+  }
+
   function updateStep(
     stepId: string,
     field: keyof Omit<DraftStep, "id">,
     value: string,
   ) {
-    setSteps((current) =>
-      current.map((step) =>
+    updateActiveDraft((current) => ({
+      ...current,
+      steps: current.steps.map((step) =>
         step.id === stepId ? { ...step, [field]: value } : step,
       ),
-    );
-    setHasUnscoredChanges(true);
-    setCompletionState("idle");
+      hasUnscoredChanges: true,
+      completionState: "idle",
+    }));
+  }
+
+  function selectStep(stepId: string) {
+    updateActiveDraft((current) => ({
+      ...current,
+      selectedStepId: stepId,
+    }));
   }
 
   function switchScenario(nextScenario: ScenarioRecord) {
-    const nextSteps = scenarioInitialSteps(nextScenario);
     setScenarioId(nextScenario.id);
-    setSteps(nextSteps);
-    setSelectedStepId(nextSteps[0]?.id ?? "");
-    setScoredEvaluation(null);
-    setHasUnscoredChanges(false);
-    setCompletionState("idle");
-    setLiveMessage("演習を切り替えました。回答を書き終えたら、計画を採点してください。");
+    setDraftsByScenario((current) => {
+      if (current[nextScenario.id]) return current;
+      return {
+        ...current,
+        [nextScenario.id]: createScenarioDraft(nextScenario),
+      };
+    });
+    setLiveMessage("演習を切り替えました。前回の編集内容はこのセッション内に保持されます。");
   }
 
   function addStep() {
@@ -155,10 +198,13 @@ export default function Home() {
       instruction: "何を確認し、どんな観測結果を返すかを具体的に書く。",
       context: "前のタスクの観測結果と、このタスクで必要な前提を渡す。",
     };
-    setSteps((current) => [...current, nextStep]);
-    setSelectedStepId(nextId);
-    setHasUnscoredChanges(true);
-    setCompletionState("idle");
+    updateActiveDraft((current) => ({
+      ...current,
+      steps: [...current.steps, nextStep],
+      selectedStepId: nextId,
+      hasUnscoredChanges: true,
+      completionState: "idle",
+    }));
     setLiveMessage("新しい分析タスクを追加しました。");
   }
 
@@ -169,35 +215,44 @@ export default function Home() {
     }
     const removedIndex = steps.findIndex((step) => step.id === stepId);
     const nextSteps = steps.filter((step) => step.id !== stepId);
-    setSteps(nextSteps);
-    if (stepId === selectedStepId) {
+    updateActiveDraft((current) => {
       const replacement = nextSteps[Math.min(removedIndex, nextSteps.length - 1)];
-      setSelectedStepId(replacement?.id ?? "");
-    }
-    setHasUnscoredChanges(true);
-    setCompletionState("idle");
+      return {
+        ...current,
+        steps: nextSteps,
+        selectedStepId: stepId === selectedStepId ? replacement?.id ?? "" : current.selectedStepId,
+        hasUnscoredChanges: true,
+        completionState: "idle",
+      };
+    });
     setLiveMessage("分析タスクを削除しました。");
   }
 
   function moveStep(stepId: string, direction: -1 | 1) {
-    setSteps((current) => {
-      const index = current.findIndex((step) => step.id === stepId);
+    updateActiveDraft((current) => {
+      const index = current.steps.findIndex((step) => step.id === stepId);
       const nextIndex = index + direction;
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
-      const next = [...current];
+      if (index < 0 || nextIndex < 0 || nextIndex >= current.steps.length) return current;
+      const next = [...current.steps];
       [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
+      return {
+        ...current,
+        steps: next,
+        selectedStepId: stepId,
+        hasUnscoredChanges: true,
+        completionState: "idle",
+      };
     });
-    setSelectedStepId(stepId);
-    setHasUnscoredChanges(true);
-    setCompletionState("idle");
   }
 
   function scorePlan() {
     const nextScore = Math.round(evaluation.total);
     const nextPassed = nextScore >= 80;
-    setScoredEvaluation(evaluation);
-    setHasUnscoredChanges(false);
+    updateActiveDraft((current) => ({
+      ...current,
+      scoredEvaluation: evaluation,
+      hasUnscoredChanges: false,
+    }));
     setLiveMessage(
       `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
     );
@@ -205,16 +260,25 @@ export default function Home() {
 
   function completeLearning() {
     if (!scoredEvaluation || hasUnscoredChanges || displayedScore === null) {
-      setCompletionState("needs-work");
+      updateActiveDraft((current) => ({
+        ...current,
+        completionState: "needs-work",
+      }));
       setLiveMessage("学習を完了する前に、現在の計画を採点してください。");
       return;
     }
 
     if (displayedPassed) {
-      setCompletionState("complete");
+      updateActiveDraft((current) => ({
+        ...current,
+        completionState: "complete",
+      }));
       setLiveMessage("学習を完了しました。安全な分析計画を組み立てられています。");
     } else {
-      setCompletionState("needs-work");
+      updateActiveDraft((current) => ({
+        ...current,
+        completionState: "needs-work",
+      }));
       setLiveMessage(
         `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`,
       );
@@ -328,7 +392,7 @@ export default function Home() {
                     type="button"
                     aria-label={`${index + 1}番目のタスク「${step.title || "無題"}」を選択`}
                     aria-current={step.id === selectedStepId ? "step" : undefined}
-                    onClick={() => setSelectedStepId(step.id)}
+                    onClick={() => selectStep(step.id)}
                   >
                     <span className="rail-number">{String(index + 1).padStart(2, "0")}</span>
                     <span className="rail-title">{step.title || "無題のタスク"}</span>
@@ -362,7 +426,7 @@ export default function Home() {
                     key={step.id}
                     tabIndex={0}
                     aria-label={`${index + 1}番目の分析タスク`}
-                    onClick={() => setSelectedStepId(step.id)}
+                    onClick={() => selectStep(step.id)}
                     onKeyDown={(event) => {
                       if (event.target !== event.currentTarget) return;
                       if (event.key === "ArrowUp" && index > 0) {
@@ -382,7 +446,7 @@ export default function Home() {
                         aria-pressed={isSelected}
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelectedStepId(step.id);
+                          selectStep(step.id);
                         }}
                       >
                         <span className="task-number">{String(index + 1).padStart(2, "0")}</span>
@@ -427,7 +491,7 @@ export default function Home() {
                         <input
                           id={`task-title-${step.id}`}
                           value={step.title}
-                          onFocus={() => setSelectedStepId(step.id)}
+                          onFocus={() => selectStep(step.id)}
                           onChange={(event) => updateStep(step.id, "title", event.target.value)}
                           placeholder="例：入力ファイルの由来を確認する"
                         />
@@ -440,7 +504,7 @@ export default function Home() {
                           <textarea
                             id={`task-instruction-${step.id}`}
                             value={step.instruction}
-                            onFocus={() => setSelectedStepId(step.id)}
+                            onFocus={() => selectStep(step.id)}
                             onChange={(event) => updateStep(step.id, "instruction", event.target.value)}
                             rows={4}
                             placeholder="対象、観察ポイント、禁止事項、期待する出力形式を書く"
@@ -454,7 +518,7 @@ export default function Home() {
                           <textarea
                             id={`task-context-${step.id}`}
                             value={step.context}
-                            onFocus={() => setSelectedStepId(step.id)}
+                            onFocus={() => selectStep(step.id)}
                             onChange={(event) => updateStep(step.id, "context", event.target.value)}
                             rows={4}
                             placeholder="前段の観測結果、既知の制約、利用可能な資料を書く"
