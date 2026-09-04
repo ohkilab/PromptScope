@@ -899,6 +899,10 @@ button:disabled {
   color: #d6d3c5;
 }
 
+.score-unscored .score-status {
+  color: #d6d3c5;
+}
+
 .score-value {
   display: flex;
   align-items: baseline;
@@ -943,6 +947,10 @@ button:disabled {
   background: var(--terracotta);
 }
 
+.score-unscored .score-track span {
+  background: transparent;
+}
+
 .score-caption {
   margin: 11px 0 0;
   color: var(--paper-deep);
@@ -958,6 +966,14 @@ button:disabled {
 .criteria-block {
   border-bottom: 1px solid var(--line-strong);
   padding-bottom: 20px;
+}
+
+.pending-evaluation {
+  margin: 0;
+  padding: 13px 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.55;
 }
 
 .subsection-heading {
