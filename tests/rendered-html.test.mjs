@@ -49,13 +49,21 @@ test("renders the PromptScope trainer as Japanese HTML at GET /", async () => {
   for (const phrase of [
     "PromptScope",
     "安全な分析は",
-    "演習を選ぶ",
-    "計画の評価",
-    "この計画を採点",
-    "学習を完了",
+    "例題で使い方を学ぶ",
+    "使い方をスキップして演習を始める",
+    "仕事を分けて書く",
+    "採点して改善する",
   ]) {
     assert.match(html, new RegExp(phrase));
   }
+});
+
+test("opens with an introduction before displaying exercise questions", async () => {
+  const html = await (await render()).text();
+
+  assert.match(html, /id="welcome-title"/);
+  assert.doesNotMatch(html, /id="workspace-title"/);
+  assert.doesNotMatch(html, /<textarea\b/);
 });
 
 test("does not render the starter loading-preview shell", async () => {
