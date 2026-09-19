@@ -1,15 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AnalysisStep } from "./lib/evaluator";
 import { evaluatePlan } from "./lib/evaluator";
 import type { ScenarioId } from "./lib/curriculum";
 import { SCENARIOS } from "./lib/curriculum";
+import { TUTORIAL_ANSWER, TUTORIAL_INPUT, TUTORIAL_SCENARIO, TUTORIAL_STEPS } from "./lib/tutorial";
+import type { TutorialStepId } from "./lib/tutorial";
+import { TutorialCoach, Welcome } from "./components/tutorial";
 
 type PlanEvaluation = ReturnType<typeof evaluatePlan>;
 
 type ScenarioRecord = {
-  id: ScenarioId;
+  id: ScenarioId | "tutorial";
   eyebrow: string;
   title: string;
   description: string;
@@ -37,7 +40,7 @@ type ScenarioDraftState = {
   completionState: CompletionState;
 };
 
-const scenarioList = Object.values(SCENARIOS) as ScenarioRecord[];
+const scenarioList = SCENARIOS;
 const EMPTY_STEPS: DraftStep[] = [];
 
 function getStepValue(step: AnalysisStep, key: string, fallback = "") {
@@ -86,6 +89,51 @@ function scoreTone(score: number) {
 }
 
 export default function Home() {
+  const [view, setView] = useState<"welcome" | "tutorial" | "exercise">("welcome");
+  const [tutorialIndex, setTutorialIndex] = useState(0);
+  const [tutorialDraft, setTutorialDraft] = useState(() => createScenarioDraft(TUTORIAL_SCENARIO));
+  const workspaceTitle = useRef<HTMLHeadingElement>(null);
+  const isTutorial = view === "tutorial";
+  const tutorialStep = TUTORIAL_STEPS[tutorialIndex].id;
+
+  useEffect(() => {
+    if (view === "exercise") {
+      workspaceTitle.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [view]);
+
+  function startTutorial() {
+    setTutorialDraft(createScenarioDraft(TUTORIAL_SCENARIO));
+    setTutorialIndex(0);
+    setView("tutorial");
+    setLiveMessage("専用の例題で使い方を練習します．演習の回答は保持されています．");
+  }
+
+  function openExercise() {
+    setView("exercise");
+    setLiveMessage("演習の回答を編集できます．使い方はいつでも開き直せます．");
+  }
+
+  function guide(id: TutorialStepId) {
+    if (!isTutorial || tutorialStep !== id) return null;
+    return <TutorialCoach
+      key={id}
+      index={tutorialIndex}
+      onBack={() => setTutorialIndex((current) => Math.max(0, current - 1))}
+      onNext={() => tutorialIndex === TUTORIAL_STEPS.length - 1 ? openExercise() : setTutorialIndex((current) => current + 1)}
+      nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges)}
+      onExample={id === "instruction" || id === "context" ? () => {
+        if (steps[0]) updateStep(steps[0].id, id, TUTORIAL_ANSWER[id]);
+        setLiveMessage("回答例を入力しました．内容を確認し，自由に書き換えてみましょう．");
+      } : undefined}
+    />;
+  }
+
+  function target(id: TutorialStepId) {
+    return isTutorial && tutorialStep === id ? " tutorial-target" : "";
+  }
+
   const firstScenario =
     scenarioList.find(
       (scenario) =>
@@ -97,7 +145,7 @@ export default function Home() {
   const [scenarioId, setScenarioId] = useState<ScenarioId>(
     () => firstScenario?.id ?? ("malware" as ScenarioId),
   );
-  const activeScenario =
+  const activeScenario = isTutorial ? TUTORIAL_SCENARIO :
     scenarioList.find((scenario) => scenario.id === scenarioId) ?? firstScenario;
   const [draftsByScenario, setDraftsByScenario] = useState<Partial<Record<ScenarioId, ScenarioDraftState>>>(() =>
     firstScenario ? { [firstScenario.id]: createScenarioDraft(firstScenario) } : {},
@@ -106,7 +154,7 @@ export default function Home() {
     "回答を書き終えたら、計画を採点してください。",
   );
   const activeDraft = activeScenario
-    ? draftsByScenario[activeScenario.id] ?? createScenarioDraft(activeScenario)
+    ? activeScenario.id === "tutorial" ? tutorialDraft : draftsByScenario[activeScenario.id] ?? createScenarioDraft(activeScenario)
     : null;
   const steps = activeDraft?.steps ?? EMPTY_STEPS;
   const selectedStepId = activeDraft?.selectedStepId ?? "";
@@ -114,13 +162,13 @@ export default function Home() {
   const hasUnscoredChanges = activeDraft?.hasUnscoredChanges ?? false;
   const completionState = activeDraft?.completionState ?? "idle";
 
-  const evaluation = useMemo(
-    () =>
-      activeScenario
-        ? evaluatePlan(activeScenario.title, toAnalysisSteps(steps))
-        : { total: 0, criteria: [], strengths: [], improvements: [] },
-    [activeScenario, steps],
-  );
+  const evaluation = activeScenario
+    ? evaluatePlan(activeScenario.title, toAnalysisSteps(steps))
+    : { total: 0, criteria: [], strengths: [], improvements: [] };
+
+  if (view === "welcome") {
+    return <Welcome onTutorial={startTutorial} onExercise={openExercise} />;
+  }
 
   if (!activeScenario) {
     return (
@@ -147,11 +195,16 @@ export default function Home() {
     update: (current: ScenarioDraftState) => ScenarioDraftState,
   ) {
     if (!activeScenario) return;
+    if (activeScenario.id === "tutorial") {
+      setTutorialDraft(update);
+      return;
+    }
+    const activeId = activeScenario.id;
     setDraftsByScenario((current) => {
-      const currentDraft = current[activeScenario.id] ?? createScenarioDraft(activeScenario);
+      const currentDraft = current[activeId] ?? createScenarioDraft(activeScenario);
       return {
         ...current,
-        [activeScenario.id]: update(currentDraft),
+        [activeId]: update(currentDraft),
       };
     });
   }
@@ -178,7 +231,7 @@ export default function Home() {
     }));
   }
 
-  function switchScenario(nextScenario: ScenarioRecord) {
+  function switchScenario(nextScenario: (typeof SCENARIOS)[number]) {
     setScenarioId(nextScenario.id);
     setDraftsByScenario((current) => {
       if (current[nextScenario.id]) return current;
@@ -191,7 +244,7 @@ export default function Home() {
   }
 
   function addStep() {
-    const nextId = `step-${Date.now()}`;
+    const nextId = `step-${crypto.randomUUID()}`;
     const nextStep: DraftStep = {
       id: nextId,
       title: "新しい分析タスク",
@@ -256,6 +309,7 @@ export default function Home() {
     setLiveMessage(
       `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
     );
+    if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
   }
 
   function completeLearning() {
@@ -286,7 +340,7 @@ export default function Home() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${isTutorial ? " tutorial-shell" : ""}`}>
       <header className="topbar">
         <div className="brand-lockup" aria-label="PromptScope">
           <span className="brand-mark" aria-hidden="true">PS</span>
@@ -302,15 +356,27 @@ export default function Home() {
         </div>
       </header>
 
+      <div className="learning-toolbar">
+        {isTutorial ? <>
+          <div><span className="mono-label accent-label">GUIDED EXAMPLE</span><strong>専用の例題で練習中</strong><span>{tutorialIndex + 1} / {TUTORIAL_STEPS.length}</span></div>
+          <button className="button button-complete" type="button" onClick={openExercise}>ガイドを終了して演習へ</button>
+        </> : <>
+          <span>目的を読み，タスクと指示を組み立てましょう．</span>
+          <button className="button button-complete" type="button" onClick={startTutorial}>使い方・例題を見る</button>
+        </>}
+      </div>
+
       <div className="workspace-grid">
         <aside className="left-column" aria-label="演習選択と学習の焦点">
           <div className="column-intro">
             <p className="mono-label">01 / EXERCISES</p>
-            <h2>演習を選ぶ</h2>
-            <p className="column-description">危険な処理を実行せず、分解の仕方だけを練習します。</p>
+            <h2>{isTutorial ? "使い方を学ぶ" : "演習を選ぶ"}</h2>
+            <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません．途中でもガイドを終了できます．" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
           </div>
 
-          <nav className="scenario-nav" aria-label="演習一覧">
+          {isTutorial ? <ol className="tutorial-outline" aria-label="使い方ガイドの流れ">
+            {TUTORIAL_STEPS.map((step, index) => <li key={step.id} aria-current={index === tutorialIndex ? "step" : undefined}><span>{String(index + 1).padStart(2, "0")}</span>{step.title}</li>)}
+          </ol> : <nav className="scenario-nav" aria-label="演習一覧">
             {scenarioList.map((scenario, index) => {
               const isActive = scenario.id === activeScenario.id;
               return (
@@ -330,7 +396,7 @@ export default function Home() {
                 </button>
               );
             })}
-          </nav>
+          </nav>}
 
           <section className="focus-note" aria-labelledby="focus-heading">
             <div className="focus-heading-row">
@@ -352,11 +418,12 @@ export default function Home() {
         </aside>
 
         <section className="center-column" aria-labelledby="workspace-title">
-          <div className="task-overview">
+          <div className={`task-overview${target("overview")}`}>
+            {guide("overview")}
             <div className="overview-heading">
               <div>
                 <p className="mono-label accent-label">{activeScenario.eyebrow}</p>
-                <h1 id="workspace-title">{activeScenario.title}</h1>
+                <h1 id="workspace-title" ref={workspaceTitle} tabIndex={-1}>{activeScenario.title}</h1>
               </div>
               <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>
             </div>
@@ -375,9 +442,16 @@ export default function Home() {
                 <strong><span>{activeScenario.riskLabel}</span><span className="meta-separator">·</span>{activeScenario.duration}</strong>
               </div>
             </div>
+            {isTutorial && <div className="tutorial-input">
+              <table><caption>入力データ / 昨日と今日のファイル一覧</caption><thead><tr><th scope="col">ファイル名</th><th scope="col">昨日（バイト）</th><th scope="col">今日（バイト）</th></tr></thead><tbody>
+                {TUTORIAL_INPUT.map((row) => <tr key={row.file}><th scope="row">{row.file}</th><td>{row.before}</td><td>{row.after}</td></tr>)}
+              </tbody></table>
+              <p>この一覧をどう確認・比較・報告するかを，AI への指示として書きます．</p>
+            </div>}
           </div>
 
-          <div className="progress-section">
+          <div className={`progress-section${target("decompose")}`}>
+            {guide("decompose")}
             <div className="section-heading">
               <div>
                 <p className="mono-label">02 / DECOMPOSE</p>
@@ -497,7 +571,8 @@ export default function Home() {
                         />
                       </div>
                       <div className="task-fields-grid">
-                        <div className="field">
+                        <div className={`field${index === 0 ? target("instruction") : ""}`}>
+                          {index === 0 && guide("instruction")}
                           <label htmlFor={`task-instruction-${step.id}`}>
                             <span className="field-index">A</span>Agentへの指示
                           </label>
@@ -511,7 +586,8 @@ export default function Home() {
                           />
                           <span className="field-hint">何をするか / 何をしないか</span>
                         </div>
-                        <div className="field">
+                        <div className={`field${index === 0 ? target("context") : ""}`}>
+                          {index === 0 && guide("context")}
                           <label htmlFor={`task-context-${step.id}`}>
                             <span className="field-index">B</span>渡すコンテキスト
                           </label>
@@ -533,7 +609,8 @@ export default function Home() {
             )}
           </div>
 
-          <button className="add-task-button" type="button" onClick={addStep}>
+          {guide("organize")}
+          <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep}>
             <span className="add-symbol" aria-hidden="true">＋</span>
             <span><strong>分析タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
           </button>
@@ -542,6 +619,7 @@ export default function Home() {
         </section>
 
         <aside className={`right-column${scoredEvaluation ? " is-scored" : ""}`} aria-label="計画の評価">
+          {guide("feedback")}
           <div className="score-panel-header">
             <div>
               <p className="mono-label">03 / REVIEW</p>
@@ -617,9 +695,11 @@ export default function Home() {
           </div>
 
           <div className="score-actions">
-            <button className="button button-score" type="button" onClick={scorePlan}>
+            {guide("score")}
+            <button className={`button button-score${target("score")}`} type="button" onClick={scorePlan}>
               <span>この計画を採点</span><span aria-hidden="true">→</span>
             </button>
+            {guide("finish")}
             <button
               className={`button button-complete${completionState === "complete" ? " is-complete" : ""}`}
               type="button"
