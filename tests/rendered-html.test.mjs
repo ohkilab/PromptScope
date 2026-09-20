@@ -74,7 +74,7 @@ test("does not render the starter loading-preview shell", async () => {
   assert.doesNotMatch(html, /react-loading-skeleton/i);
 });
 
-test("wires the page to curriculum, evaluator, and the three core actions", async () => {
+test("wires the page to curriculum, LLM evaluation, and the three core actions", async () => {
   const page = await readSource("app/page.tsx");
 
   assert.match(page, /from ["']\.\/lib\/evaluator["']/);
@@ -104,10 +104,11 @@ test("includes three safe, fictional curriculum scenarios", async () => {
   }
 });
 
-test("defines five evaluation axes and dangerous-instruction safeguards", async () => {
+test("defines five LLM evaluation axes and provider safeguards", async () => {
   const evaluator = await readSource("app/lib/evaluator.ts");
+  const llmServer = await readSource("app/lib/llm/server.ts");
 
-  assert.match(evaluator, /const\s+CRITERIA\s*:/);
+  assert.match(evaluator, /const\s+CRITERION_SPECS\s*=/);
   for (const criterionId of [
     "granularity",
     "context",
@@ -118,18 +119,11 @@ test("defines five evaluation axes and dangerous-instruction safeguards", async 
     assert.match(evaluator, new RegExp(`\\b${criterionId}\\b`));
   }
 
-  assert.match(evaluator, /UNSAFE_PATTERNS/);
-  for (const unsafeKey of [
-    "productionExecution",
-    "externalTransfer",
-    "credentialExposure",
-    "specimenExecution",
-    "privilegeEscalation",
-    "controlBypass",
-    "destructiveChange",
-  ]) {
-    assert.match(evaluator, new RegExp(`\\b${unsafeKey}\\b`));
-  }
+  assert.match(llmServer, /\/api\/chat/);
+  assert.match(llmServer, /openrouter\.ai\/api\/v1\/chat\/completions/);
+  assert.match(llmServer, /response_format/);
+  assert.match(llmServer, /破壊的変更はしない/);
+  assert.match(llmServer, /意味のない文字列/);
 });
 
 test("publishes PromptScope metadata with the Japanese document language", async () => {

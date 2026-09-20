@@ -1029,6 +1029,84 @@ button:disabled {
   line-height: 1.45;
 }
 
+.step-evaluation {
+  margin-top: 4px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.step-evaluation summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0 5px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  list-style-position: inside;
+}
+
+.step-evaluation summary small {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.step-evaluation ol {
+  display: grid;
+  gap: 8px;
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step-evaluation li {
+  display: grid;
+  gap: 3px;
+  padding-left: 8px;
+  border-left: 2px solid var(--line-strong);
+}
+
+.step-evaluation-heading {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.step-evaluation-index {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.step-evaluation-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-evaluation-heading strong {
+  color: var(--ink-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.step-evaluation-heading small {
+  color: var(--ink-faint);
+  font-size: 8px;
+}
+
+.step-evaluation li > p {
+  color: var(--ink-faint);
+  font-size: 9px;
+}
+
 .feedback-block {
   border-bottom: 1px solid var(--line-strong);
   padding-bottom: 17px;
@@ -1091,6 +1169,18 @@ button:disabled {
 .button-score:hover {
   border-color: var(--lime-dark);
   background: var(--lime-soft);
+}
+
+.button-score:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.evaluation-error {
+  margin: 0;
+  color: var(--terracotta);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .button-complete {
