@@ -4,7 +4,7 @@ import test from "node:test";
 import { SCENARIOS } from "../app/lib/curriculum.ts";
 import { evaluatePlan } from "../app/lib/evaluator.ts";
 
-const EXPECTED_MAXIMA = [25, 25, 25, 15, 10];
+const EXPECTED_MAXIMA = [20, 20, 20, 20, 20];
 const MAX_FEEDBACK_ITEMS = 6;
 const JAPANESE_TEXT = /[ぁ-んァ-ン一-龯]/;
 

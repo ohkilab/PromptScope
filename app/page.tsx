@@ -671,6 +671,28 @@ export default function Home() {
                     </div>
                     <div className="criterion-track" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>
                     <p>{criterion.message}</p>
+                    {criterion.stepDetails && criterion.stepDetails.length > 0 && (
+                      <details className="step-evaluation" defaultOpen>
+                        <summary>
+                          <span>タスク別内訳</span>
+                          <small>{criterion.stepDetails.length} TASKS</small>
+                        </summary>
+                        <ol>
+                          {criterion.stepDetails.map((detail) => (
+                            <li key={`${criterion.id}-${detail.stepId}-${detail.stepNumber}`}>
+                              <div className="step-evaluation-heading">
+                                <span className="step-evaluation-index">
+                                  {String(detail.stepNumber).padStart(2, "0")}
+                                </span>
+                                <span className="step-evaluation-title">{detail.title}</span>
+                                <strong>{Math.round(detail.score)}<small>/{detail.max}</small></strong>
+                              </div>
+                              <p>{detail.message}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    )}
                   </div>
                 );
               })}

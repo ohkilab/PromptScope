@@ -26,6 +26,16 @@ export type EvaluationCriterion = {
   score: number;
   max: number;
   message: string;
+  stepDetails?: EvaluationStepDetail[];
+};
+
+export type EvaluationStepDetail = {
+  stepId: string;
+  stepNumber: number;
+  title: string;
+  score: number;
+  max: number;
+  message: string;
 };
 
 export type EvaluationResult = {
@@ -42,6 +52,7 @@ type CriterionSpec = {
 };
 
 type NormalizedStep = {
+  id: string;
   title: string;
   instruction: string;
   context: string;
@@ -57,18 +68,7 @@ type PlanSnapshot = {
   steps: NormalizedStep[];
   text: string;
   authoredText: string;
-  meaningfulTitleText: string;
-  instructionText: string;
-  contextText: string;
   nonEmptySteps: NormalizedStep[];
-  titleCoverage: number;
-  instructionCoverage: number;
-  contextCoverage: number;
-  meaningfulTitleCoverage: number;
-  substantiveInstructionCoverage: number;
-  substantiveContextCoverage: number;
-  averageInstructionLength: number;
-  averageActionCount: number;
   hasRepeatedStepIds: boolean;
 };
 
@@ -86,16 +86,15 @@ type ContextSignals = {
   target: boolean;
   purpose: boolean;
   inputEvidence: boolean;
-  procedure: boolean;
   scopeConstraints: boolean;
 };
 
 const CRITERIA: readonly CriterionSpec[] = [
-  { id: "granularity", label: "分割粒度", max: 25 },
-  { id: "context", label: "コンテキスト充足", max: 25 },
-  { id: "safety", label: "安全性・権限境界", max: 25 },
-  { id: "verifiability", label: "検証可能性", max: 15 },
-  { id: "artifact", label: "成果物の明確さ", max: 10 },
+  { id: "granularity", label: "分割粒度", max: 20 },
+  { id: "context", label: "コンテキスト充足", max: 20 },
+  { id: "safety", label: "安全性・権限境界", max: 20 },
+  { id: "verifiability", label: "検証可能性", max: 20 },
+  { id: "artifact", label: "成果物の明確さ", max: 20 },
 ] as const;
 
 const EMPTY_PLAN_MESSAGE = "情報がありません。対象・目的・手順を追加してください。";
@@ -123,10 +122,6 @@ const EXPLICIT_INPUT_PATTERNS: readonly RegExp[] = [
   /入力|インプット|証跡|根拠|サンプル|検体|リクエスト|トレース|キャプチャ/i,
   /メタデータ|ハッシュ|バージョン|環境情報|チケット|アラート|観測|収集|取得|提供/i,
   /(?:ログ|データ|ファイル)[^。.!?\n]{0,14}(?:対象|入力|取得|提供|収集|解析|分析)/i,
-];
-
-const EXPLICIT_PROCEDURE_PATTERNS: readonly RegExp[] = [
-  /手順|ステップ|順番|まず|次に|最後に|その後/i,
 ];
 
 const CONSTRAINT_PATTERNS: readonly RegExp[] = [
@@ -348,12 +343,14 @@ function hasRepeatedIds(steps: NormalizedStep[], source: AnalysisStep[]): boolea
 function createSnapshot(taskTitle: string, steps: AnalysisStep[]): PlanSnapshot {
   const title = normalizeText(taskTitle);
   const sourceSteps = Array.isArray(steps) ? steps : [];
-  const normalizedSteps = sourceSteps.map((step) => {
+  const normalizedSteps = sourceSteps.map((step, index) => {
+    const id = normalizeText(step?.id ?? "") || `step-${index + 1}`;
     const titleText = normalizeText(step?.title ?? "");
     const instruction = normalizeText(step?.instruction ?? "");
     const context = normalizeText(step?.context ?? "");
     const actionCount = countMatches(instruction, ACTION_PATTERN);
     return {
+      id,
       title: titleText,
       instruction,
       context,
@@ -375,32 +372,12 @@ function createSnapshot(taskTitle: string, steps: AnalysisStep[]): PlanSnapshot 
   const text = [title, ...normalizedSteps.map((step) => step.text)]
     .filter(Boolean)
     .join(" ");
-  const count = normalizedSteps.length;
-  const safeCount = Math.max(1, count);
-
   return {
     title,
     steps: normalizedSteps,
     text,
     authoredText,
-    meaningfulTitleText,
-    instructionText,
-    contextText,
     nonEmptySteps,
-    titleCoverage: normalizedSteps.filter((step) => step.title.length > 0).length / safeCount,
-    instructionCoverage:
-      normalizedSteps.filter((step) => step.instruction.length > 0).length / safeCount,
-    contextCoverage: normalizedSteps.filter((step) => step.context.length > 0).length / safeCount,
-    meaningfulTitleCoverage:
-      normalizedSteps.filter((step) => step.hasMeaningfulTitle).length / safeCount,
-    substantiveInstructionCoverage:
-      normalizedSteps.filter((step) => step.hasSubstantiveInstruction).length / safeCount,
-    substantiveContextCoverage:
-      normalizedSteps.filter((step) => step.hasSubstantiveContext).length / safeCount,
-    averageInstructionLength:
-      normalizedSteps.reduce((sum, step) => sum + step.instruction.length, 0) / safeCount,
-    averageActionCount:
-      normalizedSteps.reduce((sum, step) => sum + step.actionCount, 0) / safeCount,
     hasRepeatedStepIds: hasRepeatedIds(normalizedSteps, sourceSteps),
   };
 }
@@ -410,122 +387,191 @@ function detectContextSignals(snapshot: PlanSnapshot): ContextSignals {
   return {
     target: includesAny(text, TARGET_PATTERNS),
     purpose: includesAny(text, EXPLICIT_PURPOSE_PATTERNS),
-    procedure:
-      snapshot.steps.filter((step) => step.hasMeaningfulTitle || step.hasSubstantiveInstruction).length > 1 ||
-      includesAny(text, EXPLICIT_PROCEDURE_PATTERNS) ||
-      snapshot.averageActionCount >= 2,
     inputEvidence: includesAny(text, EXPLICIT_INPUT_PATTERNS),
     scopeConstraints: includesAny(text, CONSTRAINT_PATTERNS),
   };
 }
 
-function scoreGranularity(snapshot: PlanSnapshot): number {
-  const count = snapshot.steps.length;
-  if (count === 0 || snapshot.nonEmptySteps.length === 0) return 0;
+function scoreStepGranularity(step: NormalizedStep): number {
+  if (step.text.length === 0) return 0;
 
   let score = 0;
-  if (count === 1) score += 2;
-  else if (count <= 8) score += 6;
-  else if (count <= 12) score += 4;
-  else if (count <= 16) score += 2;
-  else score += 1;
+  if (step.hasMeaningfulTitle) score += 4;
+  else if (step.title.length > 0) score += 1;
 
-  score += snapshot.meaningfulTitleCoverage * 4;
-  score += snapshot.substantiveInstructionCoverage * 9;
-  score += snapshot.substantiveContextCoverage * 3;
+  if (step.hasSubstantiveInstruction) score += 7;
+  else if (step.instruction.length > 0) score += 2;
 
-  if (snapshot.averageInstructionLength >= 30 && snapshot.averageInstructionLength <= 420) {
-    score += 2;
-  } else if (snapshot.averageInstructionLength >= 16) {
-    score += 1;
-  } else {
-    score -= 2;
-  }
+  if (step.instruction.length >= 30 && step.instruction.length <= 420) score += 3;
+  else if (step.instruction.length >= 16 && step.instruction.length <= 600) score += 1;
 
-  if (snapshot.averageActionCount >= 1 && snapshot.averageActionCount <= 4) score += 1;
-  else if (snapshot.averageActionCount > 4) score -= 2;
-  else score -= 2;
+  if (step.actionCount === 1) score += 5;
+  else if (step.actionCount === 2) score += 4;
+  else if (step.actionCount === 3) score += 3;
+  else if (step.actionCount === 4) score += 1;
 
-  if (count >= 2 && snapshot.meaningfulTitleCoverage >= 0.75 && !snapshot.hasRepeatedStepIds) score += 1;
-  if (count === 1) score -= 2;
-  if (count > 12) score -= 2;
-  if (snapshot.substantiveContextCoverage === 0) score = Math.min(score, 18);
-
-  return roundedScore(score, 25);
+  return roundedScore(score, 20);
 }
 
-function scoreContext(snapshot: PlanSnapshot, signals: ContextSignals): number {
-  if (snapshot.authoredText.length === 0) return 0;
+function granularityStepMessage(step: NormalizedStep, score: number): string {
+  if (step.text.length === 0) return "タスク名とAgentへの指示を入力してください。";
+  if (!step.hasMeaningfulTitle) return "タスク名を対象＋操作が分かる表現にしてください。";
+  if (!step.hasSubstantiveInstruction) return "Agentへの指示を対象＋動詞で具体化してください。";
+  if (step.actionCount > 4) return "操作を詰め込みすぎています。判断単位ごとに分割してください。";
+  if (step.instruction.length > 420) return "指示が長めです。独立した判断単位に分割してください。";
+  if (score >= 16) return "1つの判断単位として適切な粒度です。";
+  return "対象と主操作を1つに絞ると、担当範囲が明確になります。";
+}
 
-  const primaryText = [snapshot.instructionText, snapshot.contextText].filter(Boolean).join(" ");
-  const titleText = snapshot.meaningfulTitleText;
-  const scoreSignal = (patterns: readonly RegExp[] | RegExp, fullScore: number, titleScore: number) => {
+function stepContextSignals(step: NormalizedStep): ContextSignals {
+  const text = step.text;
+  return {
+    target: includesAny(text, TARGET_PATTERNS),
+    purpose: includesAny(text, EXPLICIT_PURPOSE_PATTERNS),
+    inputEvidence: includesAny(text, EXPLICIT_INPUT_PATTERNS),
+    scopeConstraints: includesAny(text, CONSTRAINT_PATTERNS),
+  };
+}
+
+function scoreStepContext(step: NormalizedStep): number {
+  if (step.text.length === 0) return 0;
+
+  const primaryText = [step.instruction, step.context].filter(Boolean).join(" ");
+  const scoreSignal = (
+    patterns: readonly RegExp[] | RegExp,
+    fullScore: number,
+    titleScore: number,
+  ) => {
     if (includesAny(primaryText, patterns)) return fullScore;
-    if (includesAny(titleText, patterns)) return titleScore;
+    if (includesAny(step.title, patterns)) return titleScore;
     return 0;
   };
 
   let score = 0;
-  score += scoreSignal(TARGET_PATTERNS, 5, 2);
-  score += scoreSignal(EXPLICIT_PURPOSE_PATTERNS, 5, 1);
-  score += scoreSignal(EXPLICIT_INPUT_PATTERNS, 5, 1);
-  score += scoreSignal(CONSTRAINT_PATTERNS, 5, 0);
-  if (snapshot.substantiveContextCoverage >= 0.75) {
-    score += 5;
-  } else if (snapshot.substantiveContextCoverage > 0) {
-    score += 2;
-  } else if (signals.procedure && snapshot.meaningfulTitleCoverage >= 0.75) {
-    score += 1;
+  score += scoreSignal(TARGET_PATTERNS, 4, 2);
+  score += scoreSignal(EXPLICIT_PURPOSE_PATTERNS, 3, 1);
+  score += scoreSignal(EXPLICIT_INPUT_PATTERNS, 4, 1);
+  score += scoreSignal(CONSTRAINT_PATTERNS, 4, 0);
+  if (step.hasSubstantiveContext) score += 5;
+  else if (step.context.length > 0) score += 2;
+  return roundedScore(score, 20);
+}
+
+function contextStepMessage(step: NormalizedStep, score: number): string {
+  if (step.text.length === 0) return EMPTY_PLAN_MESSAGE;
+  if (!step.hasSubstantiveContext) {
+    return "渡すコンテキストに前段の結果・前提・制約を具体的に記載してください。";
   }
-  return roundedScore(score, 25);
+
+  const signals = stepContextSignals(step);
+  const missing: string[] = [];
+  if (!signals.target) missing.push("対象");
+  if (!signals.purpose) missing.push("目的");
+  if (!signals.inputEvidence) missing.push("入力・証跡");
+  if (!signals.scopeConstraints) missing.push("範囲・制約");
+  if (missing.length > 0) return `${missing.slice(0, 2).join("・")}を補ってください。`;
+  if (score >= 16) return "対象・入力・前提・制約が揃っています。";
+  return "このタスクだけで着手できるよう、前提をもう少し具体化してください。";
+}
+
+function createStepDetails(
+  snapshot: PlanSnapshot,
+  scoreStep: (step: NormalizedStep) => number,
+  messageForStep: (step: NormalizedStep, score: number) => string,
+): EvaluationStepDetail[] {
+  return snapshot.steps.map((step, index) => {
+    const score = scoreStep(step);
+    return {
+      stepId: step.id,
+      stepNumber: index + 1,
+      title: step.title || `分析タスク ${index + 1}`,
+      score,
+      max: 20,
+      message: messageForStep(step, score),
+    };
+  });
+}
+
+function scoreGranularity(snapshot: PlanSnapshot, stepDetails: EvaluationStepDetail[]): number {
+  const count = snapshot.steps.length;
+  if (count === 0 || snapshot.nonEmptySteps.length === 0) return 0;
+
+  const stepAverage = stepDetails.reduce((sum, detail) => sum + detail.score, 0) / count;
+  let chainScore = 0;
+  if (count === 1) chainScore = 6;
+  else if (count <= 8) chainScore = 20;
+  else if (count <= 12) chainScore = 12;
+  else if (count <= 16) chainScore = 6;
+  else chainScore = 2;
+  if (snapshot.hasRepeatedStepIds) chainScore = Math.max(0, chainScore - 5);
+
+  const chainWeight = Math.min(1, stepAverage / 4);
+  return roundedScore(stepAverage * 0.8 + chainScore * 0.2 * chainWeight, 20);
+}
+
+function scoreContext(snapshot: PlanSnapshot, stepDetails: EvaluationStepDetail[]): number {
+  if (snapshot.authoredText.length === 0 || stepDetails.length === 0) return 0;
+  const average = stepDetails.reduce((sum, detail) => sum + detail.score, 0) / stepDetails.length;
+  return roundedScore(average, 20);
 }
 
 function scoreSafety(snapshot: PlanSnapshot): number {
   if (snapshot.text.length === 0) return 0;
 
-  let score = 5;
-  if (includesAny(snapshot.text, ISOLATION_PATTERNS)) score += 5;
-  if (includesAny(snapshot.text, PERMISSION_PATTERNS)) score += 4;
-  if (includesAny(snapshot.text, SECRET_PROTECTION_PATTERNS)) score += 4;
+  let score = 4;
+  if (includesAny(snapshot.text, ISOLATION_PATTERNS)) score += 4;
+  if (includesAny(snapshot.text, PERMISSION_PATTERNS)) score += 3;
+  if (includesAny(snapshot.text, SECRET_PROTECTION_PATTERNS)) score += 3;
   else if (SENSITIVE_DATA_PATTERN.test(snapshot.text)) score += 1;
-  if (includesAny(snapshot.text, BOUNDARY_PATTERNS)) score += 3;
+  if (includesAny(snapshot.text, BOUNDARY_PATTERNS)) score += 2;
   if (includesAny(snapshot.text, CHANGE_CONTROL_PATTERNS)) score += 3;
-  if (includesAny(snapshot.text, LIMIT_PATTERNS)) score += 2;
+  if (includesAny(snapshot.text, LIMIT_PATTERNS)) score += 1;
 
   const risks = detectSafetyRisks(snapshot.text);
   (Object.keys(risks) as (keyof SafetyRisks)[]).forEach((risk) => {
     if (risks[risk]) score -= RISK_PENALTIES[risk];
   });
-  return roundedScore(score, 25);
+  return roundedScore(score, 20);
 }
 
 function scoreVerifiability(snapshot: PlanSnapshot): number {
   if (snapshot.text.length === 0) return 0;
 
   let score = 0;
-  if (VERIFICATION_CRITERIA_PATTERN.test(snapshot.text)) score += 5;
-  if (VERIFICATION_EVIDENCE_PATTERN.test(snapshot.text)) score += 4;
+  if (VERIFICATION_CRITERIA_PATTERN.test(snapshot.text)) score += 7;
+  if (VERIFICATION_EVIDENCE_PATTERN.test(snapshot.text)) score += 5;
   if (includesAny(snapshot.text, /再現|再実行|固定|バージョン|ハッシュ|タイムスタンプ/i)) {
-    score += 3;
+    score += 4;
   }
-  if (VERIFICATION_CHECK_PATTERN.test(snapshot.text)) score += 3;
-  return roundedScore(score, 15);
+  if (VERIFICATION_CHECK_PATTERN.test(snapshot.text)) score += 4;
+  return roundedScore(score, 20);
 }
 
 function scoreArtifact(snapshot: PlanSnapshot): number {
   if (snapshot.text.length === 0) return 0;
 
   let score = 0;
-  if (includesAny(snapshot.text, ARTIFACT_OUTPUT_PATTERNS)) score += 4;
-  if (includesAny(snapshot.text, FORMAT_PATTERNS)) score += 3;
+  if (includesAny(snapshot.text, ARTIFACT_OUTPUT_PATTERNS)) score += 7;
+  if (includesAny(snapshot.text, FORMAT_PATTERNS)) score += 6;
   if (includesAny(snapshot.text, /項目|スキーマ|列|キー|必須|保存先|出力先|担当|提出先/i)) {
-    score += 2;
+    score += 4;
   }
-  if (includesAny(snapshot.text, /報告|共有|提出|引き継ぎ|意思決定/i)) score += 1;
-  return roundedScore(score, 10);
+  if (includesAny(snapshot.text, /報告|共有|提出|引き継ぎ|意思決定/i)) score += 3;
+  return roundedScore(score, 20);
 }
 
-function granularityMessage(snapshot: PlanSnapshot, score: number): string {
+function weakestStep(stepDetails: EvaluationStepDetail[]): EvaluationStepDetail | undefined {
+  return stepDetails.reduce<EvaluationStepDetail | undefined>(
+    (weakest, detail) => (!weakest || detail.score < weakest.score ? detail : weakest),
+    undefined,
+  );
+}
+
+function granularityMessage(
+  snapshot: PlanSnapshot,
+  score: number,
+  stepDetails: EvaluationStepDetail[],
+): string {
   if (snapshot.steps.length === 0 || snapshot.nonEmptySteps.length === 0) {
     return "分析手順がありません。";
   }
@@ -535,27 +581,28 @@ function granularityMessage(snapshot: PlanSnapshot, score: number): string {
   if (snapshot.steps.length > 12) {
     return "ステップが多めです。細かな操作を判断単位にまとめてください。";
   }
-  if (snapshot.instructionCoverage < 0.75 || snapshot.averageInstructionLength < 16) {
-    return "各ステップを対象＋動詞で具体化してください。";
+  const weakest = weakestStep(stepDetails);
+  if (weakest && weakest.score < 16) {
+    return `タスク${weakest.stepNumber}の粒度が全体評点を下げています。`;
   }
-  if (snapshot.averageActionCount > 4) {
-    return "1ステップに複数の操作を詰め込まず分割してください。";
-  }
-  if (score >= 18) return "手順数と各ステップの役割が整理されています。";
+  if (score >= 16) return "手順数と各タスクの役割が整理されています。";
   return "手順を順序付きの判断単位に整えると再利用しやすくなります。";
 }
 
-function contextMessage(signals: ContextSignals, score: number): string {
+function contextMessage(
+  snapshot: PlanSnapshot,
+  score: number,
+  stepDetails: EvaluationStepDetail[],
+): string {
   if (score === 0) return EMPTY_PLAN_MESSAGE;
-  const missing: string[] = [];
-  if (!signals.target) missing.push("分析対象");
-  if (!signals.purpose) missing.push("目的");
-  if (!signals.inputEvidence) missing.push("入力・証跡");
-  if (!signals.procedure) missing.push("手順");
-  if (!signals.scopeConstraints) missing.push("範囲・制約");
-  if (missing.length > 0) return `${missing.slice(0, 2).join("・")}を明記してください。`;
-  if (score >= 20) return "対象・目的・入力・範囲が具体的です。";
-  return "分析の前提と対象範囲をもう少し具体化してください。";
+  const weakest = weakestStep(stepDetails);
+  if (weakest && weakest.score < 16) {
+    return `タスク${weakest.stepNumber}のコンテキスト不足が全体評点を下げています。`;
+  }
+  if (snapshot.steps.length > 0 && score >= 16) {
+    return "各タスクの対象・入力・前提・制約が具体的です。";
+  }
+  return "タスク別内訳を確認し、不足している前提を補ってください。";
 }
 
 function safetyMessage(snapshot: PlanSnapshot, score: number): string {
@@ -572,7 +619,7 @@ function safetyMessage(snapshot: PlanSnapshot, score: number): string {
   if (riskLabels.length > 0) {
     return `${riskLabels.slice(0, 2).join("・")}を避け、隔離・承認条件を明記してください。`;
   }
-  if (score >= 20) return "隔離・権限・機密情報の境界が明確です。";
+  if (score >= 16) return "隔離・権限・機密情報の境界が明確です。";
   if (!includesAny(snapshot.text, ISOLATION_PATTERNS)) {
     return "隔離環境（サンドボックス等）を指定してください。";
   }
@@ -590,7 +637,7 @@ function verifiabilityMessage(snapshot: PlanSnapshot, score: number): string {
   if (!VERIFICATION_EVIDENCE_PATTERN.test(snapshot.text)) {
     return "判定に使うログ・差分などの証跡を指定してください。";
   }
-  if (score >= 12) return "成功条件と証跡があり、再確認しやすい構成です。";
+  if (score >= 16) return "成功条件と証跡があり、再確認しやすい構成です。";
   return "再現手順またはチェックポイントを追加してください。";
 }
 
@@ -602,7 +649,7 @@ function artifactMessage(snapshot: PlanSnapshot, score: number): string {
   if (!includesAny(snapshot.text, FORMAT_PATTERNS)) {
     return "出力形式と必須項目を指定してください。";
   }
-  if (score >= 8) return "成果物の種類・形式・項目が明確です。";
+  if (score >= 16) return "成果物の種類・形式・項目が明確です。";
   return "保存先や提出先まで具体化すると使いやすくなります。";
 }
 
@@ -615,17 +662,17 @@ function buildStrengths(
   const byId = (id: EvaluationCriterionId): EvaluationCriterion =>
     criteria.find((criterion) => criterion.id === id) as EvaluationCriterion;
 
-  if (byId("granularity").score >= 18) strengths.push("各ステップの役割と順序が整理されています。");
+  if (byId("granularity").score >= 16) strengths.push("各ステップの役割と順序が整理されています。");
   if (signals.target && signals.purpose && signals.inputEvidence) {
     strengths.push("対象・目的・入力情報が具体的です。");
   }
-  if (byId("safety").score >= 18) {
+  if (byId("safety").score >= 16) {
     strengths.push("隔離・最小権限・機密情報の境界が配慮されています。");
   }
-  if (byId("verifiability").score >= 11) {
+  if (byId("verifiability").score >= 15) {
     strengths.push("成功条件と証跡があり、結果を確認できます。");
   }
-  if (byId("artifact").score >= 7) {
+  if (byId("artifact").score >= 14) {
     strengths.push("成果物の形式と利用方法が具体的です。");
   }
   return strengths.slice(0, 4);
@@ -654,13 +701,13 @@ function buildImprovements(
   if (!signals.inputEvidence) improvements.push("入力データと根拠となる証跡を指定してください。");
   if (!signals.scopeConstraints) improvements.push("対象範囲・禁止事項・変更可否を指定してください。");
 
-  if (byId("safety").score < 16 || Object.values(risks).some(Boolean)) {
+  if (byId("safety").score < 13 || Object.values(risks).some(Boolean)) {
     improvements.push("隔離・最小権限・機密情報のマスキングを明記してください。");
   }
-  if (byId("verifiability").score < 10) {
+  if (byId("verifiability").score < 13) {
     improvements.push("成功条件・期待値・確認用の証跡を追加してください。");
   }
-  if (byId("artifact").score < 6) {
+  if (byId("artifact").score < 12) {
     improvements.push("成果物の形式・必須項目・保存先を指定してください。");
   }
 
@@ -671,6 +718,7 @@ function createCriterion(
   spec: CriterionSpec,
   score: number,
   message: string,
+  stepDetails?: EvaluationStepDetail[],
 ): EvaluationCriterion {
   return {
     id: spec.id,
@@ -678,6 +726,7 @@ function createCriterion(
     score: roundedScore(score, spec.max),
     max: spec.max,
     message,
+    ...(stepDetails && stepDetails.length > 0 ? { stepDetails } : {}),
   };
 }
 
@@ -691,15 +740,31 @@ function createCriterion(
 export function evaluatePlan(taskTitle: string, steps: AnalysisStep[]): EvaluationResult {
   const snapshot = createSnapshot(taskTitle, steps);
   const contextSignals = detectContextSignals(snapshot);
-  const granularityScore = scoreGranularity(snapshot);
-  const contextScore = scoreContext(snapshot, contextSignals);
+  const granularityStepDetails = createStepDetails(
+    snapshot,
+    scoreStepGranularity,
+    granularityStepMessage,
+  );
+  const contextStepDetails = createStepDetails(snapshot, scoreStepContext, contextStepMessage);
+  const granularityScore = scoreGranularity(snapshot, granularityStepDetails);
+  const contextScore = scoreContext(snapshot, contextStepDetails);
   const safetyScore = scoreSafety(snapshot);
   const verifiabilityScore = scoreVerifiability(snapshot);
   const artifactScore = scoreArtifact(snapshot);
 
   const criteria: EvaluationCriterion[] = [
-    createCriterion(CRITERIA[0], granularityScore, granularityMessage(snapshot, granularityScore)),
-    createCriterion(CRITERIA[1], contextScore, contextMessage(contextSignals, contextScore)),
+    createCriterion(
+      CRITERIA[0],
+      granularityScore,
+      granularityMessage(snapshot, granularityScore, granularityStepDetails),
+      granularityStepDetails,
+    ),
+    createCriterion(
+      CRITERIA[1],
+      contextScore,
+      contextMessage(snapshot, contextScore, contextStepDetails),
+      contextStepDetails,
+    ),
     createCriterion(CRITERIA[2], safetyScore, safetyMessage(snapshot, safetyScore)),
     createCriterion(
       CRITERIA[3],
