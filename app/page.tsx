@@ -1,15 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AnalysisStep } from "./lib/evaluator";
-import { evaluatePlan } from "./lib/evaluator";
+import type { AnalysisStep, EvaluationResult } from "./lib/evaluator";
 import type { ScenarioId } from "./lib/curriculum";
 import { SCENARIOS } from "./lib/curriculum";
 import { TUTORIAL_ANSWER, TUTORIAL_INPUT, TUTORIAL_SCENARIO, TUTORIAL_STEPS } from "./lib/tutorial";
 import type { TutorialStepId } from "./lib/tutorial";
 import { TutorialCoach, Welcome } from "./components/tutorial";
 
-type PlanEvaluation = ReturnType<typeof evaluatePlan>;
+type PlanEvaluation = EvaluationResult;
 
 type ScenarioRecord = {
   id: ScenarioId | "tutorial";
@@ -42,6 +41,7 @@ type ScenarioDraftState = {
 
 const scenarioList = SCENARIOS;
 const EMPTY_STEPS: DraftStep[] = [];
+const EVALUATION_AXIS_COUNT = 5;
 
 function getStepValue(step: AnalysisStep, key: string, fallback = "") {
   const values = step as unknown as Record<string, unknown>;
@@ -71,6 +71,14 @@ function scenarioInitialSteps(scenario: ScenarioRecord) {
   return scenario.initialSteps.map(toDraftStep);
 }
 
+function planFingerprint(steps: DraftStep[]) {
+  return JSON.stringify(steps.map((step) => ({
+    title: step.title.replace(/\s+/g, " ").trim(),
+    instruction: step.instruction.replace(/\s+/g, " ").trim(),
+    context: step.context.replace(/\s+/g, " ").trim(),
+  })));
+}
+
 function createScenarioDraft(scenario: ScenarioRecord): ScenarioDraftState {
   const steps = scenarioInitialSteps(scenario);
   return {
@@ -92,6 +100,8 @@ export default function Home() {
   const [view, setView] = useState<"welcome" | "tutorial" | "exercise">("welcome");
   const [tutorialIndex, setTutorialIndex] = useState(0);
   const [tutorialDraft, setTutorialDraft] = useState(() => createScenarioDraft(TUTORIAL_SCENARIO));
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState("");
   const workspaceTitle = useRef<HTMLHeadingElement>(null);
   const isTutorial = view === "tutorial";
   const tutorialStep = TUTORIAL_STEPS[tutorialIndex].id;
@@ -122,7 +132,7 @@ export default function Home() {
       index={tutorialIndex}
       onBack={() => setTutorialIndex((current) => Math.max(0, current - 1))}
       onNext={() => tutorialIndex === TUTORIAL_STEPS.length - 1 ? openExercise() : setTutorialIndex((current) => current + 1)}
-      nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges)}
+      nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges || isEvaluating)}
       onExample={id === "instruction" || id === "context" ? () => {
         if (steps[0]) updateStep(steps[0].id, id, TUTORIAL_ANSWER[id]);
         setLiveMessage("回答例を入力しました．内容を確認し，自由に書き換えてみましょう．");
@@ -162,10 +172,6 @@ export default function Home() {
   const hasUnscoredChanges = activeDraft?.hasUnscoredChanges ?? false;
   const completionState = activeDraft?.completionState ?? "idle";
 
-  const evaluation = activeScenario
-    ? evaluatePlan(activeScenario.title, toAnalysisSteps(steps))
-    : { total: 0, criteria: [], strengths: [], improvements: [] };
-
   if (view === "welcome") {
     return <Welcome onTutorial={startTutorial} onExercise={openExercise} />;
   }
@@ -182,7 +188,9 @@ export default function Home() {
   const displayedScore = scoredEvaluation ? Math.round(scoredEvaluation.total) : null;
   const displayedCriteria = scoredEvaluation?.criteria ?? [];
   const displayedPassed = displayedScore !== null && displayedScore >= 80;
-  const scoreStatus = !scoredEvaluation
+  const scoreStatus = isEvaluating
+    ? "LLMで採点中"
+    : !scoredEvaluation
     ? "未採点"
     : hasUnscoredChanges
       ? "前回採点 / 再採点待ち"
@@ -190,6 +198,11 @@ export default function Home() {
         ? "PASS / 目標達成"
         : "DRAFT / 改善中";
   const summaryTone = displayedScore === null ? "unscored" : scoreTone(displayedScore);
+  const evaluationSource = scoredEvaluation?.provider === "openrouter"
+    ? "OPENROUTER"
+    : scoredEvaluation?.provider === "ollama"
+      ? "OLLAMA"
+      : "LLM";
 
   function updateActiveDraft(
     update: (current: ScenarioDraftState) => ScenarioDraftState,
@@ -214,6 +227,7 @@ export default function Home() {
     field: keyof Omit<DraftStep, "id">,
     value: string,
   ) {
+    setEvaluationError("");
     updateActiveDraft((current) => ({
       ...current,
       steps: current.steps.map((step) =>
@@ -232,6 +246,7 @@ export default function Home() {
   }
 
   function switchScenario(nextScenario: (typeof SCENARIOS)[number]) {
+    setEvaluationError("");
     setScenarioId(nextScenario.id);
     setDraftsByScenario((current) => {
       if (current[nextScenario.id]) return current;
@@ -247,10 +262,11 @@ export default function Home() {
     const nextId = `step-${crypto.randomUUID()}`;
     const nextStep: DraftStep = {
       id: nextId,
-      title: "新しい分析タスク",
-      instruction: "何を確認し、どんな観測結果を返すかを具体的に書く。",
-      context: "前のタスクの観測結果と、このタスクで必要な前提を渡す。",
+      title: "",
+      instruction: "",
+      context: "",
     };
+    setEvaluationError("");
     updateActiveDraft((current) => ({
       ...current,
       steps: [...current.steps, nextStep],
@@ -268,6 +284,7 @@ export default function Home() {
     }
     const removedIndex = steps.findIndex((step) => step.id === stepId);
     const nextSteps = steps.filter((step) => step.id !== stepId);
+    setEvaluationError("");
     updateActiveDraft((current) => {
       const replacement = nextSteps[Math.min(removedIndex, nextSteps.length - 1)];
       return {
@@ -282,6 +299,7 @@ export default function Home() {
   }
 
   function moveStep(stepId: string, direction: -1 | 1) {
+    setEvaluationError("");
     updateActiveDraft((current) => {
       const index = current.steps.findIndex((step) => step.id === stepId);
       const nextIndex = index + direction;
@@ -298,22 +316,65 @@ export default function Home() {
     });
   }
 
-  function scorePlan() {
-    const nextScore = Math.round(evaluation.total);
-    const nextPassed = nextScore >= 80;
-    updateActiveDraft((current) => ({
-      ...current,
-      scoredEvaluation: evaluation,
-      hasUnscoredChanges: false,
-    }));
-    setLiveMessage(
-      `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
-    );
-    if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
+  async function scorePlan() {
+    if (isEvaluating) return;
+
+    const submittedFingerprint = planFingerprint(steps);
+    const initialFingerprint = planFingerprint(scenarioInitialSteps(activeScenario));
+    if (!isTutorial && submittedFingerprint === initialFingerprint) {
+      const message = "初期案のままでは採点できません。少なくとも1か所を自分の判断で編集してください。";
+      setEvaluationError(message);
+      setLiveMessage(message);
+      return;
+    }
+
+    setIsEvaluating(true);
+    setEvaluationError("");
+    setLiveMessage("LLMが計画を採点しています。しばらくお待ちください。");
+
+    try {
+      const response = await fetch("/api/evaluate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scenario: {
+            title: activeScenario.title,
+            description: activeScenario.description,
+            goal: activeScenario.goal,
+            environment: activeScenario.environment,
+          },
+          steps: toAnalysisSteps(steps),
+        }),
+      });
+      const payload = await response.json() as PlanEvaluation | { error?: string };
+      if (!response.ok || !("criteria" in payload)) {
+        throw new Error("error" in payload && payload.error
+          ? payload.error
+          : "採点結果を取得できませんでした。");
+      }
+
+      const nextScore = Math.round(payload.total);
+      const nextPassed = nextScore >= 80;
+      updateActiveDraft((current) => ({
+        ...current,
+        scoredEvaluation: payload,
+        hasUnscoredChanges: planFingerprint(current.steps) !== submittedFingerprint,
+      }));
+      setLiveMessage(
+        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
+      );
+      if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "採点に失敗しました。";
+      setEvaluationError(message);
+      setLiveMessage(message);
+    } finally {
+      setIsEvaluating(false);
+    }
   }
 
   function completeLearning() {
-    if (!scoredEvaluation || hasUnscoredChanges || displayedScore === null) {
+    if (isEvaluating || !scoredEvaluation || hasUnscoredChanges || displayedScore === null) {
       updateActiveDraft((current) => ({
         ...current,
         completionState: "needs-work",
@@ -352,7 +413,7 @@ export default function Home() {
           <span className="local-indicator" aria-hidden="true" />
           <span>学習モード</span>
           <span className="slash" aria-hidden="true">/</span>
-          <span className="mono-label">LOCAL ONLY</span>
+          <span className="mono-label">LLM ASSISTED</span>
         </div>
       </header>
 
@@ -413,7 +474,7 @@ export default function Home() {
 
           <div className="left-footer">
             <span className="safety-stamp">NO EXECUTION</span>
-            <p>教育用プロトタイプ<br />実処理・API通信はありません</p>
+            <p>教育用プロトタイプ<br />実処理は行いません・採点時のみLLMと通信</p>
           </div>
         </aside>
 
@@ -625,7 +686,7 @@ export default function Home() {
               <p className="mono-label">03 / REVIEW</p>
               <h2>計画の評価</h2>
             </div>
-            <span className="live-badge">MANUAL</span>
+            <span className="live-badge">{evaluationSource}</span>
           </div>
 
           <div className={`score-summary score-${summaryTone}`} aria-live="polite" aria-atomic="true">
@@ -654,7 +715,7 @@ export default function Home() {
           <div className="criteria-block">
             <div className="subsection-heading">
               <span className="mono-label">EVALUATION AXES</span>
-              <span className="criteria-count">{evaluation.criteria.length} AXES</span>
+              <span className="criteria-count">{EVALUATION_AXIS_COUNT} AXES</span>
             </div>
             <div className="criteria-list">
               {displayedCriteria.length === 0 ? (
@@ -671,6 +732,28 @@ export default function Home() {
                     </div>
                     <div className="criterion-track" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>
                     <p>{criterion.message}</p>
+                    {criterion.stepDetails && criterion.stepDetails.length > 0 && (
+                      <details className="step-evaluation">
+                        <summary>
+                          <span>タスク別内訳</span>
+                          <small>{criterion.stepDetails.length} TASKS</small>
+                        </summary>
+                        <ol>
+                          {criterion.stepDetails.map((detail) => (
+                            <li key={`${criterion.id}-${detail.stepId}-${detail.stepNumber}`}>
+                              <div className="step-evaluation-heading">
+                                <span className="step-evaluation-index">
+                                  {String(detail.stepNumber).padStart(2, "0")}
+                                </span>
+                                <span className="step-evaluation-title">{detail.title}</span>
+                                <strong>{Math.round(detail.score)}<small>/{detail.max}</small></strong>
+                              </div>
+                              <p>{detail.message}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    )}
                   </div>
                 );
               })}
@@ -696,9 +779,17 @@ export default function Home() {
 
           <div className="score-actions">
             {guide("score")}
-            <button className={`button button-score${target("score")}`} type="button" onClick={scorePlan}>
-              <span>この計画を採点</span><span aria-hidden="true">→</span>
+            <button
+              className={`button button-score${target("score")}`}
+              type="button"
+              onClick={scorePlan}
+              disabled={isEvaluating}
+              aria-busy={isEvaluating}
+            >
+              <span>{isEvaluating ? "LLMで採点中..." : "この計画を採点"}</span>
+              <span aria-hidden="true">{isEvaluating ? "…" : "→"}</span>
             </button>
+            {evaluationError && <p className="evaluation-error" role="alert">{evaluationError}</p>}
             {guide("finish")}
             <button
               className={`button button-complete${completionState === "complete" ? " is-complete" : ""}`}
@@ -717,13 +808,18 @@ export default function Home() {
             )}
           </div>
           <p className="live-region" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
-          <p className="right-footnote">評価は入力内容からローカルに算出されます。<br />実行結果や外部通信は扱いません。</p>
+          <p className="right-footnote">
+            {scoredEvaluation
+              ? `採点: ${evaluationSource} / ${scoredEvaluation.model}`
+              : "評価時に入力内容を設定済みのLLMへ送信します。"}
+            <br />評価は教育上の助言であり、実環境の安全性を保証しません。
+          </p>
         </aside>
       </div>
 
       <footer className="app-footer">
         <span>PromptScope / ANALYSIS INSTRUCTION TRAINER</span>
-        <span>v0.1 · LOCAL EDUCATIONAL PROTOTYPE</span>
+        <span>v0.2 · LLM-ASSISTED EDUCATIONAL PROTOTYPE</span>
       </footer>
     </main>
   );

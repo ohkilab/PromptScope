@@ -15,7 +15,8 @@ Agentへの指示品質を学ぶための教育用トレーナーです。検体
 - マルウェア解析、脆弱性調査、ログ解析の3演習を切り替え
 - 分割タスクの追加、削除、上下移動、選択
 - タスクタイトル、Agentへの指示、渡すコンテキストの編集
-- 5軸・100点満点のローカル採点と、採点ボタンによる評価表示
+- OllamaまたはOpenRouterを使った5軸・100点満点のLLM採点
+- 分割粒度とコンテキスト充足のタスク別評価内訳
 - 改善提案と強みの表示
 - 80点以上を合格として「学習を完了」できる状態表示
 
@@ -34,11 +35,12 @@ Agentへの指示品質を学ぶための教育用トレーナーです。検体
 ## 安全上の境界
 
 PromptScopeは教育用プロトタイプです。画面上の演習では、検体を実行したり、
-脆弱性を悪用したり、実環境へ変更を加えたりしません。外部APIへの送信も
-ありません。
+脆弱性を悪用したり、実環境へ変更を加えたりしません。採点時には入力した計画を
+設定済みのLLMへ送信します。OpenRouter利用時は外部APIへ送信されるため、実在する
+資格情報、個人情報、機密情報を入力しないでください。
 
-採点は入力文を対象にしたローカルのヒューリスティック評価であり、実際の
-セキュリティ判定・脆弱性診断・安全性の保証ではありません。評価結果を
+採点は入力文を対象にしたLLM評価であり、実際のセキュリティ判定・脆弱性診断・
+安全性の保証ではありません。評価結果を
 現実の環境での実行許可やリスク受容の根拠に使わないでください。
 
 ## 技術スタック
@@ -46,7 +48,8 @@ PromptScopeは教育用プロトタイプです。画面上の演習では、検
 - React 19 / TypeScript
 - vinext / Vite
 - Cloudflare Sites互換のビルド構成
-- 評価ロジックはブラウザ内で実行（外部サービス依存なし）
+- サーバー側の共通評価APIからOllamaまたはOpenRouterへ接続
+- JSON Schemaによる構造化された採点結果
 
 ## 起動と検証
 
@@ -54,7 +57,47 @@ Node.js `>=22.13.0` を用意してください。
 
 ```bash
 npm install
+```
+
+### Ollamaを使う（ローカル既定）
+
+Ollamaを起動し、使用するモデルを用意します。既定モデルは`qwen3.5:4b`です。
+
+```bash
+ollama pull qwen3.5:4b
+cp .env.example .env.local
 npm run dev
+```
+
+Windows PowerShellでは`cp`の代わりに次を使用できます。
+
+```powershell
+Copy-Item .env.example .env.local
+```
+
+モデルや接続先を変更する場合は`.env.local`の`OLLAMA_MODEL`と
+`OLLAMA_BASE_URL`を編集してください。既定ではOllamaの自動判定に任せ、利用可能なら
+GPUへオフロードします。CPU実行へ固定したい場合だけ`OLLAMA_NUM_GPU=0`を設定してください。
+コンテキスト長とバッチサイズは`OLLAMA_NUM_CTX`、`OLLAMA_NUM_BATCH`で調整できます。
+
+### OpenRouterを使う
+
+`.env.local`を次のように設定します。`OPENROUTER_MODEL`には構造化出力に対応した
+モデルIDを指定してください。APIキーはクライアントへ送信されません。
+
+```dotenv
+LLM_PROVIDER=openrouter
+OPENROUTER_API_KEY=your-api-key
+OPENROUTER_MODEL=provider/model-id
+```
+
+Cloudflareへデプロイする場合も、同じ名前の環境変数・シークレットをランタイムへ
+設定してください。デプロイ環境から利用者のPC上のOllamaには接続できないため、
+公開環境では通常OpenRouterを使用します。
+
+### 検証
+
+```bash
 npm test
 npm run lint
 ```
@@ -68,7 +111,9 @@ npm run lint
 - `app/globals.css` — アイボリー基調のレイアウト、レスポンシブ、フォーカス状態
 - `app/layout.tsx` — PromptScopeのmetadataと日本語ドキュメント設定
 - `app/lib/curriculum.ts` — 3演習の説明、環境、初期タスク
-- `app/lib/evaluator.ts` — 5軸のヒューリスティック評価と改善提案
+- `app/api/evaluate/route.ts` — LLM採点API
+- `app/lib/evaluator.ts` — 評価の型、JSON Schema、応答の検証・正規化
+- `app/lib/llm/server.ts` — Ollama・OpenRouter接続と評価プロンプト
 - `app/lib/tutorial.ts` — 演習から独立した例題，入力データ，回答例，ガイド文
 - `app/components/tutorial.tsx` — 導入画面と，フォーカス・スクロールに対応した吹き出し
 
