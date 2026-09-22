@@ -12,7 +12,7 @@ const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 const DEFAULT_OLLAMA_CONTEXT_LENGTH = 4_096;
 const DEFAULT_OLLAMA_BATCH_SIZE = 32;
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-const REQUEST_TIMEOUT_MS = 120_000;
+const REQUEST_TIMEOUT_MS = 300_000;
 
 type UnknownRecord = Record<string, unknown>;
 

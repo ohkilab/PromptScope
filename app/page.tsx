@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { FocusEvent } from "react";
+import * as Accordion from "@radix-ui/react-accordion";
+import * as Progress from "@radix-ui/react-progress";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import type { AnalysisStep, EvaluationResult } from "./lib/evaluator";
 import type { ScenarioId } from "./lib/curriculum";
 import { SCENARIOS } from "./lib/curriculum";
@@ -133,6 +137,10 @@ export default function Home() {
       onBack={() => setTutorialIndex((current) => Math.max(0, current - 1))}
       onNext={() => tutorialIndex === TUTORIAL_STEPS.length - 1 ? openExercise() : setTutorialIndex((current) => current + 1)}
       nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges || isEvaluating)}
+      onSkip={id === "score" ? () => {
+        setTutorialIndex((current) => current + 1);
+        setLiveMessage("LLM採点をスキップしました．採点環境が準備できたら，通常の演習で試せます．");
+      } : undefined}
       onExample={id === "instruction" || id === "context" ? () => {
         if (steps[0]) updateStep(steps[0].id, id, TUTORIAL_ANSWER[id]);
         setLiveMessage("回答例を入力しました．内容を確認し，自由に書き換えてみましょう．");
@@ -179,7 +187,7 @@ export default function Home() {
   if (!activeScenario) {
     return (
       <main className="empty-app">
-        <p className="mono-label">PROMPT SCOPE / 00</p>
+        <p className="mono-label">PromptScope</p>
         <h1>演習を読み込めませんでした。</h1>
       </main>
     );
@@ -195,8 +203,8 @@ export default function Home() {
     : hasUnscoredChanges
       ? "前回採点 / 再採点待ち"
       : displayedPassed
-        ? "PASS / 目標達成"
-        : "DRAFT / 改善中";
+        ? "目標達成"
+        : "改善中";
   const summaryTone = displayedScore === null ? "unscored" : scoreTone(displayedScore);
   const evaluationSource = scoredEvaluation?.provider === "openrouter"
     ? "OPENROUTER"
@@ -400,8 +408,20 @@ export default function Home() {
     }
   }
 
+  function keepTutorialFocusInSpotlight(event: FocusEvent<HTMLElement>) {
+    if (!isTutorial || !(event.target instanceof HTMLElement)) return;
+    if (event.target.closest(".tutorial-target, .tutorial-coach")) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    document.querySelector<HTMLElement>(".tutorial-coach h3")?.focus({ preventScroll: true });
+  }
+
   return (
-    <main className={`app-shell${isTutorial ? " tutorial-shell" : ""}`}>
+    <main
+      className={`app-shell${isTutorial ? " tutorial-shell" : ""}`}
+      onFocusCapture={keepTutorialFocusInSpotlight}
+    >
       <header className="topbar">
         <div className="brand-lockup" aria-label="PromptScope">
           <span className="brand-mark" aria-hidden="true">PS</span>
@@ -413,13 +433,13 @@ export default function Home() {
           <span className="local-indicator" aria-hidden="true" />
           <span>学習モード</span>
           <span className="slash" aria-hidden="true">/</span>
-          <span className="mono-label">LLM ASSISTED</span>
+          <span className="mono-label">LLMによる採点支援</span>
         </div>
       </header>
 
       <div className="learning-toolbar">
         {isTutorial ? <>
-          <div><span className="mono-label accent-label">GUIDED EXAMPLE</span><strong>専用の例題で練習中</strong><span>{tutorialIndex + 1} / {TUTORIAL_STEPS.length}</span></div>
+          <div><span className="mono-label accent-label">例題ガイド</span><strong>専用の例題で練習中</strong><span>{tutorialIndex + 1} / {TUTORIAL_STEPS.length}</span></div>
           <button className="button button-complete" type="button" onClick={openExercise}>ガイドを終了して演習へ</button>
         </> : <>
           <span>目的を読み，タスクと指示を組み立てましょう．</span>
@@ -430,7 +450,7 @@ export default function Home() {
       <div className="workspace-grid">
         <aside className="left-column" aria-label="演習選択と学習の焦点">
           <div className="column-intro">
-            <p className="mono-label">01 / EXERCISES</p>
+            <p className="mono-label">1．演習</p>
             <h2>{isTutorial ? "使い方を学ぶ" : "演習を選ぶ"}</h2>
             <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません．途中でもガイドを終了できます．" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
           </div>
@@ -461,7 +481,7 @@ export default function Home() {
 
           <section className="focus-note" aria-labelledby="focus-heading">
             <div className="focus-heading-row">
-              <p className="mono-label">LEARNING FOCUS</p>
+              <p className="mono-label">学習の要点</p>
               <span className="focus-pin" aria-hidden="true">✳</span>
             </div>
             <h2 id="focus-heading">学習の焦点</h2>
@@ -473,7 +493,7 @@ export default function Home() {
           </section>
 
           <div className="left-footer">
-            <span className="safety-stamp">NO EXECUTION</span>
+            <span className="safety-stamp">実処理なし</span>
             <p>教育用プロトタイプ<br />実処理は行いません・採点時のみLLMと通信</p>
           </div>
         </aside>
@@ -491,15 +511,15 @@ export default function Home() {
             <p className="overview-description">{activeScenario.description}</p>
             <div className="overview-meta" aria-label="演習の概要">
               <div className="meta-block">
-                <span className="mono-label">GOAL</span>
+                <span className="mono-label">目標</span>
                 <strong>{activeScenario.goal}</strong>
               </div>
               <div className="meta-block">
-                <span className="mono-label">ENVIRONMENT</span>
+                <span className="mono-label">演習環境</span>
                 <strong>{activeScenario.environment}</strong>
               </div>
               <div className="meta-block meta-risk">
-                <span className="mono-label">RISK / TIME</span>
+                <span className="mono-label">リスク・所要時間</span>
                 <strong><span>{activeScenario.riskLabel}</span><span className="meta-separator">·</span>{activeScenario.duration}</strong>
               </div>
             </div>
@@ -515,10 +535,10 @@ export default function Home() {
             {guide("decompose")}
             <div className="section-heading">
               <div>
-                <p className="mono-label">02 / DECOMPOSE</p>
+                <p className="mono-label">2．タスクの分解</p>
                 <h2>分解の進捗</h2>
               </div>
-              <span className="progress-count">{String(steps.length).padStart(2, "0")} TASKS</span>
+              <span className="progress-count">{steps.length}件のタスク</span>
             </div>
             <ol className="progress-rail" aria-label="分析タスクの順序">
               {steps.map((step, index) => (
@@ -539,16 +559,17 @@ export default function Home() {
 
           <div className="task-list-heading">
             <div>
-              <p className="mono-label">TASK PLAN</p>
+              <p className="mono-label">タスク計画</p>
               <h2>分析タスク</h2>
             </div>
             <p className="helper-copy">安全な順序と、Agentに渡す境界を設計します。</p>
           </div>
 
+          <Tooltip.Provider delayDuration={450} skipDelayDuration={200}>
           <div className="task-list" aria-label="編集可能な分析タスク">
             {steps.length === 0 ? (
               <div className="empty-tasks">
-                <p className="mono-label">NO TASKS YET</p>
+                <p className="mono-label">タスクはまだありません</p>
                 <p>最初の分析タスクを追加して計画を始めましょう。</p>
                 <button className="button button-secondary" type="button" onClick={addStep}>＋ タスクを追加</button>
               </div>
@@ -588,35 +609,32 @@ export default function Home() {
                         <span className="task-state">{isSelected ? "編集中" : "待機中"}</span>
                       </button>
                       <div className="task-actions" aria-label={`${index + 1}番目のタスク操作`}>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          aria-label="タスクを上へ移動"
-                          disabled={index === 0}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            moveStep(step.id, -1);
-                          }}
-                        >↑</button>
-                        <button
-                          className="icon-button"
-                          type="button"
-                          aria-label="タスクを下へ移動"
-                          disabled={index === steps.length - 1}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            moveStep(step.id, 1);
-                          }}
-                        >↓</button>
-                        <button
-                          className="icon-button icon-button-danger"
-                          type="button"
-                          aria-label="タスクを削除"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeStep(step.id);
-                          }}
-                        >×</button>
+                        {[
+                          { label: "タスクを上へ移動", symbol: "↑", disabled: index === 0, action: () => moveStep(step.id, -1), danger: false },
+                          { label: "タスクを下へ移動", symbol: "↓", disabled: index === steps.length - 1, action: () => moveStep(step.id, 1), danger: false },
+                          { label: "タスクを削除", symbol: "×", disabled: false, action: () => removeStep(step.id), danger: true },
+                        ].map((action) => (
+                          <Tooltip.Root key={action.label}>
+                            <Tooltip.Trigger asChild>
+                              <button
+                                className={`icon-button${action.danger ? " icon-button-danger" : ""}`}
+                                type="button"
+                                aria-label={action.label}
+                                disabled={action.disabled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  action.action();
+                                }}
+                              >{action.symbol}</button>
+                            </Tooltip.Trigger>
+                            <Tooltip.Portal>
+                              <Tooltip.Content className="action-tooltip" side="top" sideOffset={6}>
+                                {action.label}
+                                <Tooltip.Arrow className="action-tooltip-arrow" />
+                              </Tooltip.Content>
+                            </Tooltip.Portal>
+                          </Tooltip.Root>
+                        ))}
                       </div>
                     </div>
 
@@ -669,6 +687,7 @@ export default function Home() {
               })
             )}
           </div>
+          </Tooltip.Provider>
 
           {guide("organize")}
           <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep}>
@@ -679,11 +698,11 @@ export default function Home() {
           <p className="keyboard-note"><span aria-hidden="true">⌘</span> フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
         </section>
 
-        <aside className={`right-column${scoredEvaluation ? " is-scored" : ""}`} aria-label="計画の評価">
+        <aside className={`right-column${scoredEvaluation ? " is-scored" : ""}${target("feedback")}`} aria-label="計画の評価">
           {guide("feedback")}
           <div className="score-panel-header">
             <div>
-              <p className="mono-label">03 / REVIEW</p>
+              <p className="mono-label">3．振り返り</p>
               <h2>計画の評価</h2>
             </div>
             <span className="live-badge">{evaluationSource}</span>
@@ -698,9 +717,14 @@ export default function Home() {
               {displayedScore === null ? <strong>--</strong> : <strong>{displayedScore}</strong>}
               <span>/ 100</span>
             </div>
-            <div className="score-track" aria-hidden="true">
-              <span style={{ width: `${displayedScore === null ? 0 : Math.max(0, Math.min(displayedScore, 100))}%` }} />
-            </div>
+            <Progress.Root
+              className="score-track"
+              value={displayedScore ?? 0}
+              max={100}
+              aria-label={displayedScore === null ? "総合スコアは未採点です" : `総合スコア ${displayedScore}点`}
+            >
+              <Progress.Indicator style={{ width: `${displayedScore === null ? 0 : Math.max(0, Math.min(displayedScore, 100))}%` }} />
+            </Progress.Root>
             <p className="score-caption">
               {!scoredEvaluation
                 ? "採点ボタンを押すまで点数は表示されません。"
@@ -714,8 +738,8 @@ export default function Home() {
 
           <div className="criteria-block">
             <div className="subsection-heading">
-              <span className="mono-label">EVALUATION AXES</span>
-              <span className="criteria-count">{EVALUATION_AXIS_COUNT} AXES</span>
+              <span className="mono-label">評価項目</span>
+              <span className="criteria-count">{EVALUATION_AXIS_COUNT}項目</span>
             </div>
             <div className="criteria-list">
               {displayedCriteria.length === 0 ? (
@@ -730,15 +754,24 @@ export default function Home() {
                       <span>{criterion.label}</span>
                       <strong>{criterionScore}<small>/{criterion.max}</small></strong>
                     </div>
-                    <div className="criterion-track" aria-hidden="true"><span style={{ width: `${percent}%` }} /></div>
+                    <Progress.Root
+                      className="criterion-track"
+                      value={criterionScore}
+                      max={criterionMax}
+                      aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
+                    ><Progress.Indicator style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
                     {criterion.stepDetails && criterion.stepDetails.length > 0 && (
-                      <details className="step-evaluation">
-                        <summary>
-                          <span>タスク別内訳</span>
-                          <small>{criterion.stepDetails.length} TASKS</small>
-                        </summary>
-                        <ol>
+                      <Accordion.Root className="step-evaluation" type="single" collapsible>
+                        <Accordion.Item value="details">
+                          <Accordion.Header className="step-evaluation-header">
+                            <Accordion.Trigger className="step-evaluation-trigger">
+                              <span>タスク別内訳</span>
+                              <span className="step-evaluation-meta"><small>{criterion.stepDetails.length}件</small><span className="step-evaluation-chevron" aria-hidden="true">⌄</span></span>
+                            </Accordion.Trigger>
+                          </Accordion.Header>
+                          <Accordion.Content className="step-evaluation-content">
+                            <ol>
                           {criterion.stepDetails.map((detail) => (
                             <li key={`${criterion.id}-${detail.stepId}-${detail.stepNumber}`}>
                               <div className="step-evaluation-heading">
@@ -751,8 +784,10 @@ export default function Home() {
                               <p>{detail.message}</p>
                             </li>
                           ))}
-                        </ol>
-                      </details>
+                            </ol>
+                          </Accordion.Content>
+                        </Accordion.Item>
+                      </Accordion.Root>
                     )}
                   </div>
                 );
@@ -762,7 +797,7 @@ export default function Home() {
 
           <div className="feedback-block">
             <div className="subsection-heading">
-              <span className="mono-label">NEXT ITERATION</span>
+              <span className="mono-label">次の改善点</span>
               <span className="feedback-mark" aria-hidden="true">↗</span>
             </div>
             <ul className="feedback-list">
