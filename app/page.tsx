@@ -410,7 +410,7 @@ export default function Home() {
 
   function keepTutorialFocusInSpotlight(event: FocusEvent<HTMLElement>) {
     if (!isTutorial || !(event.target instanceof HTMLElement)) return;
-    if (event.target.closest(".tutorial-target, .tutorial-coach")) return;
+    if (event.target.closest(".tutorial-target, .tutorial-coach, .learning-toolbar")) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -424,9 +424,7 @@ export default function Home() {
     >
       <header className="topbar">
         <div className="brand-lockup" aria-label="PromptScope">
-          <span className="brand-mark" aria-hidden="true">PS</span>
           <span className="brand-name">PromptScope</span>
-          <span className="brand-rule" aria-hidden="true" />
           <span className="brand-tagline">安全な分析は、よい分解から。</span>
         </div>
         <div className="topbar-meta">
@@ -450,7 +448,7 @@ export default function Home() {
       <div className="workspace-grid">
         <aside className="left-column" aria-label="演習選択と学習の焦点">
           <div className="column-intro">
-            <p className="mono-label">1．演習</p>
+            <p className="mono-label">演習</p>
             <h2>{isTutorial ? "使い方を学ぶ" : "演習を選ぶ"}</h2>
             <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません．途中でもガイドを終了できます．" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
           </div>
@@ -458,7 +456,7 @@ export default function Home() {
           {isTutorial ? <ol className="tutorial-outline" aria-label="使い方ガイドの流れ">
             {TUTORIAL_STEPS.map((step, index) => <li key={step.id} aria-current={index === tutorialIndex ? "step" : undefined}><span>{String(index + 1).padStart(2, "0")}</span>{step.title}</li>)}
           </ol> : <nav className="scenario-nav" aria-label="演習一覧">
-            {scenarioList.map((scenario, index) => {
+            {scenarioList.map((scenario) => {
               const isActive = scenario.id === activeScenario.id;
               return (
                 <button
@@ -468,7 +466,6 @@ export default function Home() {
                   aria-current={isActive ? "page" : undefined}
                   onClick={() => switchScenario(scenario)}
                 >
-                  <span className="scenario-index">0{index + 1}</span>
                   <span className="scenario-copy">
                     <span className="scenario-eyebrow">{scenario.eyebrow}</span>
                     <span className="scenario-title">{scenario.title}</span>
@@ -482,14 +479,13 @@ export default function Home() {
           <section className="focus-note" aria-labelledby="focus-heading">
             <div className="focus-heading-row">
               <p className="mono-label">学習の要点</p>
-              <span className="focus-pin" aria-hidden="true">✳</span>
             </div>
             <h2 id="focus-heading">学習の焦点</h2>
-            <ol className="focus-list">
-              <li><span>01</span><p>目的と完了条件を先に置く</p></li>
-              <li><span>02</span><p>観測と判断を別のタスクに分ける</p></li>
-              <li><span>03</span><p>権限・入力・出力の境界を明記する</p></li>
-            </ol>
+            <ul className="focus-list">
+              <li><p>目的と完了条件を先に置く</p></li>
+              <li><p>観測と判断を別のタスクに分ける</p></li>
+              <li><p>権限・入力・出力の境界を明記する</p></li>
+            </ul>
           </section>
 
           <div className="left-footer">
@@ -535,7 +531,7 @@ export default function Home() {
             {guide("decompose")}
             <div className="section-heading">
               <div>
-                <p className="mono-label">2．タスクの分解</p>
+                <p className="mono-label">タスクの分解</p>
                 <h2>分解の進捗</h2>
               </div>
               <span className="progress-count">{steps.length}件のタスク</span>
@@ -702,7 +698,7 @@ export default function Home() {
           {guide("feedback")}
           <div className="score-panel-header">
             <div>
-              <p className="mono-label">3．振り返り</p>
+              <p className="mono-label">振り返り</p>
               <h2>計画の評価</h2>
             </div>
             <span className="live-badge">{evaluationSource}</span>

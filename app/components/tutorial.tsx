@@ -7,7 +7,7 @@ export function Welcome({ onTutorial, onExercise }: { onTutorial: () => void; on
   return (
     <main className="app-shell welcome-shell">
       <header className="topbar">
-        <div className="brand-lockup"><span className="brand-mark" aria-hidden="true">PS</span><span className="brand-name">PromptScope</span></div>
+        <div className="brand-lockup"><span className="brand-name">PromptScope</span></div>
         <span className="mono-label">分析指示トレーニング</span>
       </header>
       <section className="welcome-content" aria-labelledby="welcome-title">
