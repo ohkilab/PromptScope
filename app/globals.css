@@ -957,19 +957,19 @@ button:disabled {
   margin-top: 17px;
 }
 
-.score-track span,
-.criterion-track span {
+.score-track-indicator,
+.criterion-track-indicator {
   height: 100%;
   display: block;
   background: var(--lime);
   transition: width 250ms ease;
 }
 
-.score-low .score-track span {
+.score-low .score-track-indicator {
   background: var(--terracotta);
 }
 
-.score-unscored .score-track span {
+.score-unscored .score-track-indicator {
   background: transparent;
 }
 
@@ -1040,7 +1040,7 @@ button:disabled {
   background: var(--line);
 }
 
-.criterion-track span {
+.criterion-track-indicator {
   background: var(--ink);
 }
 
@@ -1222,11 +1222,6 @@ button:disabled {
   color: var(--ink-muted);
   font-size: 10px;
   line-height: 1.5;
-}
-
-.strength-note span {
-  margin-right: 6px;
-  color: var(--lime-dark);
 }
 
 .score-actions {
@@ -2313,7 +2308,7 @@ body {
   margin-top: 12px;
 }
 
-.score-track span {
+.score-track-indicator {
   background: var(--console-green);
 }
 
@@ -2341,7 +2336,7 @@ body {
   height: 5px;
 }
 
-.criterion-track span {
+.criterion-track-indicator {
   background: var(--lime);
 }
 

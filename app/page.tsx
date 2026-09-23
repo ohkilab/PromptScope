@@ -719,7 +719,7 @@ export default function Home() {
               max={100}
               aria-label={displayedScore === null ? "総合スコアは未採点です" : `総合スコア ${displayedScore}点`}
             >
-              <Progress.Indicator style={{ width: `${displayedScore === null ? 0 : Math.max(0, Math.min(displayedScore, 100))}%` }} />
+              <Progress.Indicator className="score-track-indicator" style={{ width: `${displayedScore === null ? 0 : Math.max(0, Math.min(displayedScore, 100))}%` }} />
             </Progress.Root>
             <p className="score-caption">
               {!scoredEvaluation
@@ -755,7 +755,7 @@ export default function Home() {
                       value={criterionScore}
                       max={criterionMax}
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
-                    ><Progress.Indicator style={{ width: `${percent}%` }} /></Progress.Root>
+                    ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
                     {criterion.stepDetails && criterion.stepDetails.length > 0 && (
                       <Accordion.Root className="step-evaluation" type="single" collapsible>
@@ -798,13 +798,13 @@ export default function Home() {
             </div>
             <ul className="feedback-list">
               {!scoredEvaluation ? (
-                <li><span aria-hidden="true">＋</span>採点後に改善提案を表示します。</li>
+                <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
               ) : scoredEvaluation.improvements.length > 0 ? scoredEvaluation.improvements.slice(0, 3).map((improvement) => (
-                <li key={improvement}><span aria-hidden="true">＋</span>{improvement}</li>
+                <li key={improvement}><span aria-hidden="true">・</span>{improvement}</li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
             {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
-              <p className="strength-note"><span aria-hidden="true">✳</span>{scoredEvaluation.strengths[0]}</p>
+              <p className="strength-note">{scoredEvaluation.strengths[0]}</p>
             )}
           </div>
 
