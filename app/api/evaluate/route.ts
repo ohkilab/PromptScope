@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json();
     const evaluationRequest = parseEvaluationRequest(payload);
-    const evaluation = await evaluatePlanWithLlm(evaluationRequest);
+    const evaluation = await evaluatePlanWithLlm(evaluationRequest, request.signal);
     return Response.json(evaluation, {
       headers: { "Cache-Control": "no-store" },
     });

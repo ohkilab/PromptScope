@@ -1,3 +1,5 @@
+import type { EvaluationProfile } from "./exercises";
+
 /** A single analysis task authored in the trainer. */
 export type AnalysisStep = {
   id: string;
@@ -48,6 +50,8 @@ export type EvaluationRequest = {
     description: string;
     goal: string;
     environment: string;
+    materials?: string;
+    evaluationProfile?: EvaluationProfile;
   };
   steps: AnalysisStep[];
 };
