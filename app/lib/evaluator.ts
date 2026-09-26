@@ -38,6 +38,8 @@ export type EvaluationResult = {
   strengths: string[];
   improvements: string[];
   total: number;
+  passed: boolean;
+  gateFailures: string[];
   provider: EvaluationProvider;
   model: string;
 };
@@ -59,6 +61,9 @@ export const CRITERION_SPECS = [
   { id: "verifiability", label: "検証可能性", max: 20 },
   { id: "artifact", label: "成果物の明確さ", max: 20 },
 ] as const;
+
+export const PASSING_TOTAL = 80;
+export const MINIMUM_STEP_SCORE = 12;
 
 const CRITERION_IDS = CRITERION_SPECS.map((criterion) => criterion.id);
 
@@ -241,11 +246,30 @@ export function normalizeEvaluation(
     return criterion;
   });
 
+  const total = criteria.reduce((sum, criterion) => sum + criterion.score, 0);
+  const gateFailures: string[] = [];
+  if (total < PASSING_TOTAL) {
+    gateFailures.push(`総合点が合格基準の${PASSING_TOTAL}点に達していません。`);
+  }
+
+  for (const criterion of criteria) {
+    if (!criterion.stepDetails) continue;
+    for (const detail of criterion.stepDetails) {
+      if (detail.score < MINIMUM_STEP_SCORE) {
+        gateFailures.push(
+          `タスク${detail.stepNumber}の${criterion.label}は${MINIMUM_STEP_SCORE}点以上が必要です。`,
+        );
+      }
+    }
+  }
+
   return {
     criteria,
     strengths: stringList(value.strengths, "strengths", 4),
     improvements: stringList(value.improvements, "improvements", 6),
-    total: criteria.reduce((sum, criterion) => sum + criterion.score, 0),
+    total,
+    passed: gateFailures.length === 0,
+    gateFailures,
     provider,
     model,
   };

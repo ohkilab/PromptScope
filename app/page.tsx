@@ -195,7 +195,10 @@ export default function Home() {
 
   const displayedScore = scoredEvaluation ? Math.round(scoredEvaluation.total) : null;
   const displayedCriteria = scoredEvaluation?.criteria ?? [];
-  const displayedPassed = displayedScore !== null && displayedScore >= 80;
+  const displayedPassed = scoredEvaluation?.passed ?? false;
+  const displayedFeedback = scoredEvaluation
+    ? [...scoredEvaluation.gateFailures, ...scoredEvaluation.improvements].slice(0, 3)
+    : [];
   const scoreStatus = isEvaluating
     ? "LLMで採点中"
     : !scoredEvaluation
@@ -205,7 +208,9 @@ export default function Home() {
       : displayedPassed
         ? "目標達成"
         : "改善中";
-  const summaryTone = displayedScore === null ? "unscored" : scoreTone(displayedScore);
+  const summaryTone = displayedScore === null
+    ? "unscored"
+    : scoreTone(displayedPassed ? displayedScore : Math.min(displayedScore, 79));
   const evaluationSource = scoredEvaluation?.provider === "openrouter"
     ? "OPENROUTER"
     : scoredEvaluation?.provider === "ollama"
@@ -362,14 +367,14 @@ export default function Home() {
       }
 
       const nextScore = Math.round(payload.total);
-      const nextPassed = nextScore >= 80;
+      const nextPassed = payload.passed;
       updateActiveDraft((current) => ({
         ...current,
         scoredEvaluation: payload,
         hasUnscoredChanges: planFingerprint(current.steps) !== submittedFingerprint,
       }));
       setLiveMessage(
-        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
+        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格条件を満たしています。" : nextScore < 80 ? "80点まで改善の余地があります。" : "タスク別の合格条件を確認してください。"}`,
       );
       if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
     } catch (error) {
@@ -402,8 +407,9 @@ export default function Home() {
         ...current,
         completionState: "needs-work",
       }));
-      setLiveMessage(
-        `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`,
+      setLiveMessage(displayedScore < 80
+        ? `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`
+        : scoredEvaluation.gateFailures[0] ?? "タスク別の合格条件を確認してください。",
       );
     }
   }
@@ -799,7 +805,7 @@ export default function Home() {
             <ul className="feedback-list">
               {!scoredEvaluation ? (
                 <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
-              ) : scoredEvaluation.improvements.length > 0 ? scoredEvaluation.improvements.slice(0, 3).map((improvement) => (
+              ) : displayedFeedback.length > 0 ? displayedFeedback.map((improvement) => (
                 <li key={improvement}><span aria-hidden="true">・</span>{improvement}</li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
@@ -834,7 +840,7 @@ export default function Home() {
               <p className="completion-note" role="status">
                 {!scoredEvaluation || hasUnscoredChanges
                   ? "現在の計画を採点してから完了判定を行います。"
-                  : "合格点は80点です。右の提案から計画を改善しましょう。"}
+                  : scoredEvaluation.gateFailures[0] ?? "右の提案から計画を改善しましょう。"}
               </p>
             )}
           </div>
