@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { FocusEvent } from "react";
-import * as Accordion from "@radix-ui/react-accordion";
 import * as Progress from "@radix-ui/react-progress";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { AnalysisStep, EvaluationResult } from "./lib/evaluator";
@@ -10,6 +9,7 @@ import type { ScenarioId } from "./lib/curriculum";
 import { SCENARIOS } from "./lib/curriculum";
 import { TUTORIAL_ANSWER, TUTORIAL_INPUT, TUTORIAL_SCENARIO, TUTORIAL_STEPS } from "./lib/tutorial";
 import type { TutorialStepId } from "./lib/tutorial";
+import { CheckDetails, RubricGuide, ScoreBreakdown } from "./components/evaluation-details";
 import { TutorialCoach, Welcome } from "./components/tutorial";
 
 type PlanEvaluation = EvaluationResult;
@@ -195,7 +195,7 @@ export default function Home() {
 
   const displayedScore = scoredEvaluation ? Math.round(scoredEvaluation.total) : null;
   const displayedCriteria = scoredEvaluation?.criteria ?? [];
-  const displayedPassed = displayedScore !== null && displayedScore >= 80;
+  const displayedPassed = scoredEvaluation?.passed === true;
   const scoreStatus = isEvaluating
     ? "LLMで採点中"
     : !scoredEvaluation
@@ -210,7 +210,7 @@ export default function Home() {
     ? "OPENROUTER"
     : scoredEvaluation?.provider === "ollama"
       ? "OLLAMA"
-      : "LLM";
+      : scoredEvaluation?.provider === "rules" ? "入力チェック" : "LLM";
 
   function updateActiveDraft(
     update: (current: ScenarioDraftState) => ScenarioDraftState,
@@ -328,13 +328,6 @@ export default function Home() {
     if (isEvaluating) return;
 
     const submittedFingerprint = planFingerprint(steps);
-    const initialFingerprint = planFingerprint(scenarioInitialSteps(activeScenario));
-    if (!isTutorial && submittedFingerprint === initialFingerprint) {
-      const message = "初期案のままでは採点できません。少なくとも1か所を自分の判断で編集してください。";
-      setEvaluationError(message);
-      setLiveMessage(message);
-      return;
-    }
 
     setIsEvaluating(true);
     setEvaluationError("");
@@ -345,12 +338,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          scenario: {
-            title: activeScenario.title,
-            description: activeScenario.description,
-            goal: activeScenario.goal,
-            environment: activeScenario.environment,
-          },
+          scenarioId: activeScenario.id,
           steps: toAnalysisSteps(steps),
         }),
       });
@@ -362,14 +350,14 @@ export default function Home() {
       }
 
       const nextScore = Math.round(payload.total);
-      const nextPassed = nextScore >= 80;
+      const nextPassed = payload.passed;
       updateActiveDraft((current) => ({
         ...current,
         scoredEvaluation: payload,
         hasUnscoredChanges: planFingerprint(current.steps) !== submittedFingerprint,
       }));
       setLiveMessage(
-        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
+        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "必須項目と各軸の不足を確認してください。"}`,
       );
       if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
     } catch (error) {
@@ -403,7 +391,7 @@ export default function Home() {
         completionState: "needs-work",
       }));
       setLiveMessage(
-        `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`,
+        "まだ学習途中です。80点以上・必須項目すべて充足・各軸12点以上を満たすよう改善してください。",
       );
     }
   }
@@ -558,7 +546,7 @@ export default function Home() {
               <p className="mono-label">タスク計画</p>
               <h2>分析タスク</h2>
             </div>
-            <p className="helper-copy">安全な順序と、Agentに渡す境界を設計します。</p>
+            <p className="helper-copy">各タスクの指示と前提を自分で書き、順序と境界を設計します。</p>
           </div>
 
           <Tooltip.Provider delayDuration={450} skipDelayDuration={200}>
@@ -732,6 +720,9 @@ export default function Home() {
             </p>
           </div>
 
+          {scoredEvaluation && <ScoreBreakdown result={scoredEvaluation} steps={steps} />}
+          <RubricGuide scenarioId={activeScenario.id} />
+
           <div className="criteria-block">
             <div className="subsection-heading">
               <span className="mono-label">評価項目</span>
@@ -757,34 +748,7 @@ export default function Home() {
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
                     ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
-                    {criterion.stepDetails && criterion.stepDetails.length > 0 && (
-                      <Accordion.Root className="step-evaluation" type="single" collapsible>
-                        <Accordion.Item value="details">
-                          <Accordion.Header className="step-evaluation-header">
-                            <Accordion.Trigger className="step-evaluation-trigger">
-                              <span>タスク別内訳</span>
-                              <span className="step-evaluation-meta"><small>{criterion.stepDetails.length}件</small><span className="step-evaluation-chevron" aria-hidden="true">⌄</span></span>
-                            </Accordion.Trigger>
-                          </Accordion.Header>
-                          <Accordion.Content className="step-evaluation-content">
-                            <ol>
-                          {criterion.stepDetails.map((detail) => (
-                            <li key={`${criterion.id}-${detail.stepId}-${detail.stepNumber}`}>
-                              <div className="step-evaluation-heading">
-                                <span className="step-evaluation-index">
-                                  {String(detail.stepNumber).padStart(2, "0")}
-                                </span>
-                                <span className="step-evaluation-title">{detail.title}</span>
-                                <strong>{Math.round(detail.score)}<small>/{detail.max}</small></strong>
-                              </div>
-                              <p>{detail.message}</p>
-                            </li>
-                          ))}
-                            </ol>
-                          </Accordion.Content>
-                        </Accordion.Item>
-                      </Accordion.Root>
-                    )}
+                    <CheckDetails checks={criterion.checks} steps={steps} />
                   </div>
                 );
               })}
@@ -799,7 +763,7 @@ export default function Home() {
             <ul className="feedback-list">
               {!scoredEvaluation ? (
                 <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
-              ) : scoredEvaluation.improvements.length > 0 ? scoredEvaluation.improvements.slice(0, 3).map((improvement) => (
+              ) : scoredEvaluation.improvements.length > 0 ? scoredEvaluation.improvements.slice(0, 5).map((improvement) => (
                 <li key={improvement}><span aria-hidden="true">・</span>{improvement}</li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
@@ -834,7 +798,7 @@ export default function Home() {
               <p className="completion-note" role="status">
                 {!scoredEvaluation || hasUnscoredChanges
                   ? "現在の計画を採点してから完了判定を行います。"
-                  : "合格点は80点です。右の提案から計画を改善しましょう。"}
+                  : "80点以上・必須項目すべて充足・各軸12点以上が合格条件です。不足項目を改善しましょう。"}
               </p>
             )}
           </div>
