@@ -126,8 +126,12 @@ test("defines five LLM evaluation axes and provider safeguards", async () => {
   assert.match(llmServer, /意味のない文字列/);
   assert.match(llmServer, /管理者権限、root、sudo、権限昇格/);
   assert.match(llmServer, /SSH秘密鍵、APIキー、トークン、パスワード/);
-  assert.match(llmServer, /artifact は scenario\.goal/);
-  assert.match(llmServer, /最終成果物がscenario\.goalと矛盾する/);
+  assert.match(llmServer, /artifact はscenario\.goal/);
+  assert.match(llmServer, /成果物がgoalと矛盾する/);
+  assert.match(evaluator, /safetyAssessment/);
+  assert.match(evaluator, /artifactAssessment/);
+  assert.match(evaluator, /SAFETY_VIOLATION_POINTS/);
+  assert.match(evaluator, /ARTIFACT_DEFECT_POINTS/);
 });
 
 test("publishes PromptScope metadata with the Japanese document language", async () => {

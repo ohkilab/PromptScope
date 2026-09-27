@@ -62,13 +62,34 @@ npm install
 
 ### Ollamaを使う（ローカル既定）
 
-Ollamaを起動し、使用するモデルを用意します。既定モデルは`qwen3.5:4b`です。
+既定モデルは`qwen3.5:4b`です．最初のターミナルでOllamaサーバーを起動し，
+このターミナルは開いたままにします．
+
+```bash
+ollama serve
+```
+
+既にOllamaがサービスとして起動している場合，この操作は不要です．
+`address already in use`と表示された場合も，通常は既存サーバーが
+`127.0.0.1:11434`で動作しています．
+
+別のターミナルでモデルを取得し，Ollamaへの接続を確認します．
 
 ```bash
 ollama pull qwen3.5:4b
+ollama ls
+curl -fsS http://127.0.0.1:11434/api/tags
+```
+
+続けて同じターミナルでPromptScopeを起動します．
+
+```bash
 cp .env.example .env.local
 npm run dev
 ```
+
+ターミナルに表示されたローカルURLをブラウザーで開き，「この計画を採点」を実行してください．
+Ollamaのターミナルに推論処理が表示されれば接続できています．
 
 Windows PowerShellでは`cp`の代わりに次を使用できます。
 
@@ -80,6 +101,27 @@ Copy-Item .env.example .env.local
 `OLLAMA_BASE_URL`を編集してください。既定ではOllamaの自動判定に任せ、利用可能なら
 GPUへオフロードします。CPU実行へ固定したい場合だけ`OLLAMA_NUM_GPU=0`を設定してください。
 コンテキスト長とバッチサイズは`OLLAMA_NUM_CTX`、`OLLAMA_NUM_BATCH`で調整できます。
+
+GPUを確認する場合は，採点を1回実行した直後に次を実行します．
+
+```bash
+nvidia-smi
+ollama ps
+```
+
+`ollama ps`で実行中モデルを確認でき，`nvidia-smi`でOllamaプロセスとGPUメモリ使用量を
+確認できます．AMD GPUの場合は，導入済みのROCm監視ツールで確認してください．
+
+接続エラーになる場合は，次の順番で確認します．
+
+```bash
+ollama -v
+ollama ls
+curl -fsS http://127.0.0.1:11434/api/tags
+```
+
+3つ目が失敗する場合はOllamaサーバーが起動していません．`ollama serve`を実行してから，
+PromptScopeの開発サーバーを再起動してください．
 
 ### OpenRouterを使う
 
