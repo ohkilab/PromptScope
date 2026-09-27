@@ -1,6 +1,7 @@
 import type { AnalysisStep } from "./evaluator";
+import type { EvaluationProfile } from "./exercises";
 
-export type ScenarioId = "malware" | "vulnerability" | "logs";
+export type ScenarioId = "malware" | "vulnerability" | "logs" | `custom-${string}`;
 
 export type Scenario = {
   id: ScenarioId;
@@ -12,6 +13,8 @@ export type Scenario = {
   riskLabel: string;
   duration: string;
   initialSteps: AnalysisStep[];
+  materials?: string;
+  evaluationProfile?: EvaluationProfile;
 };
 
 export const SCENARIOS: Scenario[] = [
