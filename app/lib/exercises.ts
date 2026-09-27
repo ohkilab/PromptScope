@@ -20,6 +20,8 @@ export type EvaluationProfile = {
 };
 export type CustomExerciseInput = {
   title: string;
+  riskLabel: string;
+  duration: string;
   description: string;
   goal: string;
   environment: string;
@@ -76,7 +78,7 @@ export function defaultEvaluationFocus(domain: ExerciseDomain): EvaluationFocus 
 
 export function newCustomExerciseInput(): CustomExerciseInput {
   return {
-    title: "", description: "", goal: "", environment: "", materials: "",
+    title: "", riskLabel: "計画演習", duration: "自由", description: "", goal: "", environment: "", materials: "",
     evaluationProfile: { domain: "other", focus: defaultEvaluationFocus("other"), incidentIds: [], references: [] },
   };
 }
@@ -130,6 +132,8 @@ export function parseCustomExerciseInput(value: unknown): CustomExerciseInput {
   if (!record(value)) throw new Error("問題の形式が不正です。");
   return {
     title: text(value.title, "問題タイトル", 240, true),
+    riskLabel: value.riskLabel === undefined ? "計画演習" : text(value.riskLabel, "リスク", 40, true),
+    duration: value.duration === undefined ? "自由" : text(value.duration, "所要時間", 40, true),
     description: text(value.description, "状況・問題文", 1_500, true),
     goal: text(value.goal, "学習目的・期待する成果", 1_500, true),
     environment: text(value.environment, "環境・権限・制約", 2_000, true),
@@ -142,7 +146,7 @@ export function createCustomScenario(value: unknown, id: `custom-${string}`): Cu
   if (!/^custom-[a-zA-Z0-9-]{1,100}$/.test(id)) throw new Error("作成した問題のIDが不正です。");
   const input = parseCustomExerciseInput(value);
   return {
-    ...input, id, eyebrow: "自作問題", riskLabel: "計画演習", duration: "自由",
+    ...input, id, eyebrow: "自作問題",
     initialSteps: [{ id: `${id}-first`, title: "", instruction: "", context: "" }],
   };
 }

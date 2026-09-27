@@ -19,7 +19,8 @@ type Props = {
 export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [input, setInput] = useState<CustomExerciseInput>(() => scenario ? {
-    title: scenario.title, description: scenario.description, goal: scenario.goal,
+    title: scenario.title, riskLabel: scenario.riskLabel, duration: scenario.duration,
+    description: scenario.description, goal: scenario.goal,
     environment: scenario.environment, materials: scenario.materials,
     evaluationProfile: structuredClone(scenario.evaluationProfile),
   } : newCustomExerciseInput());
@@ -89,6 +90,10 @@ export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
       <fieldset disabled={suggesting} className="exercise-fields">
         <legend>問題の設定</legend>
         <div className="field"><label htmlFor="exercise-title">問題タイトル</label><input id="exercise-title" required maxLength={240} value={input.title} onChange={(event) => changeField("title", event.target.value)} placeholder="例：クラウド監査ログから不審なデータアクセスを調べる" /></div>
+        <div className="exercise-metadata-fields">
+          <div className="field"><label htmlFor="exercise-risk">リスク</label><input id="exercise-risk" required maxLength={40} value={input.riskLabel} onChange={(event) => changeField("riskLabel", event.target.value)} placeholder="例：低リスク、計画演習" /></div>
+          <div className="field"><label htmlFor="exercise-duration">所要時間</label><input id="exercise-duration" required maxLength={40} value={input.duration} onChange={(event) => changeField("duration", event.target.value)} placeholder="例：15分、20〜30分、自由" /></div>
+        </div>
         <div className="field"><label htmlFor="exercise-domain">演習分野</label><select id="exercise-domain" value={input.evaluationProfile.domain} onChange={(event) => {
           const domain = event.target.value as ExerciseDomain;
           setInput((current) => ({ ...current, evaluationProfile: { ...current.evaluationProfile, domain, focus: defaultEvaluationFocus(domain) } }));
@@ -118,7 +123,7 @@ export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
           <ul>{incident.lessons.map((lesson, index) => <li key={index}>{CRITERION_SPECS.find(({ id }) => id === lesson.criterion)?.label}：{lesson.description}</li>)}</ul>
         </div>)}</div>
         <h3>独自の参照資料</h3>
-        <p className="exercise-help">公開資料のURLと要約・抜粋を入力できます。URLの本文は自動取得しません。入力した要約を評価の参考にします。</p>
+        <p className="exercise-help">公開資料のURLと要約・抜粋を入力できます。URLの本文は自動取得しません。入力した要約を評価の参考にします。改行・箇条書き（-）・番号付きリスト（1.）は演習画面にも反映されます。</p>
         {input.evaluationProfile.references.map((reference, index) => <div className="reference-fields" key={index}>
           {(["title", "url", "excerpt"] as const).map((field) => <div className="field" key={field}>
             <label htmlFor={`reference-${index}-${field}`}>資料{index + 1} · {field === "title" ? "タイトル" : field === "url" ? "出典URL（HTTPS）" : "要約・抜粋と問題への関連"}</label>
@@ -137,7 +142,7 @@ export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
 
       <fieldset disabled={suggesting} className="exercise-fields">
         <legend>問題に応じた評価観点</legend>
-        <p className="exercise-help">各軸の確認項目を変更・追加できます。共通の5軸・各20点と安全上の基準に、これらの観点と事例の教訓を加えて採点します。</p>
+        <p className="exercise-help">各軸の確認項目を変更・追加できます。共通の5軸・各20点と安全上の基準に、これらの観点と事例の教訓を加えて採点します。改行・箇条書き（-）・番号付きリスト（1.）は演習画面にも反映されます。</p>
         <div className="exercise-editor-actions">
           <button className="button button-secondary" type="button" onClick={suggestFocus} disabled={suggesting} aria-busy={suggesting}>{suggesting ? "評価観点を提案中…" : "目的と事例から評価観点を提案"}</button>
           <button className="button button-complete" type="button" onClick={() => {

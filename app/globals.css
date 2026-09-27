@@ -442,6 +442,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  overflow-wrap: anywhere;
   color: var(--terracotta);
 }
 
@@ -1782,6 +1783,12 @@ body {
   font-weight: 700;
 }
 
+.exercise-metadata-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .exercise-fields .exercise-help {
   margin: 0;
 }
@@ -1927,6 +1934,35 @@ body {
   margin: 4px 0 0;
 }
 
+.evaluation-profile-details .formatted-text {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.evaluation-profile-details .formatted-text p,
+.evaluation-profile-details .formatted-text ul,
+.evaluation-profile-details .formatted-text ol {
+  margin: 0;
+}
+
+.evaluation-profile-details .formatted-text > * + * {
+  margin-top: 8px;
+}
+
+.evaluation-profile-details .formatted-text p,
+.evaluation-profile-details .formatted-text li {
+  white-space: pre-wrap;
+}
+
+.evaluation-profile-details .formatted-text ul,
+.evaluation-profile-details .formatted-text ol {
+  padding-left: 20px;
+}
+
+.evaluation-profile-details .formatted-text ol {
+  list-style: decimal;
+}
+
 @media (max-width: 640px) {
   .exercise-editor {
     padding: 16px;
@@ -1934,6 +1970,10 @@ body {
 
   .exercise-fields {
     padding: 12px;
+  }
+
+  .exercise-metadata-fields {
+    grid-template-columns: 1fr;
   }
 
   .overview-heading {
@@ -2030,6 +2070,25 @@ body {
   padding: 27px 16px 26px 21px;
   background: var(--console-side);
   color: var(--console-side-text);
+}
+
+@media (min-width: 961px) {
+  .left-column,
+  .right-column {
+    margin-top: 17px;
+  }
+
+  .left-column {
+    position: sticky;
+    top: 60px;
+    max-height: calc(100dvh - 60px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+
+  .left-column > * {
+    flex-shrink: 0;
+  }
 }
 
 .left-column .mono-label,

@@ -424,7 +424,11 @@ export function parseFocusSuggestionRequest(value: unknown): CustomExerciseInput
 
 export async function suggestEvaluationFocus(input: CustomExerciseInput, signal?: AbortSignal): Promise<{ focus: EvaluationFocus; provider: EvaluationProvider; model: string }> {
   const config = providerConfig();
-  const { evaluationProfile, ...scenario } = input;
+  const { evaluationProfile } = input;
+  const scenario = {
+    title: input.title, description: input.description, goal: input.goal,
+    environment: input.environment, materials: input.materials,
+  };
   const messages: ChatMessage[] = [
     {
       role: "system",

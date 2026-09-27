@@ -54,7 +54,8 @@ export function saveCustomExercises(storage: Storage, scenarios: CustomScenario[
     exercises: scenarios.map((scenario) => ({
       id: scenario.id,
       input: {
-        title: scenario.title, description: scenario.description, goal: scenario.goal,
+        title: scenario.title, riskLabel: scenario.riskLabel, duration: scenario.duration,
+        description: scenario.description, goal: scenario.goal,
         environment: scenario.environment, materials: scenario.materials, evaluationProfile: scenario.evaluationProfile,
       },
       steps: stepsByScenario[scenario.id] ?? scenario.initialSteps,
