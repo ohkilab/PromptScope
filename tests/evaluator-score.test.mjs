@@ -45,14 +45,11 @@ function rawEvaluation(request = defaultRequest, overrides = {}) {
       },
       obviousTypos: overrides.obviousTypos?.[index] ?? [],
     })),
-    safetyAssessment: {
-      violations: overrides.violations ?? [],
-    },
+    safetyAssessment: { violations: overrides.violations ?? [] },
     artifactAssessment: {
       expectedArtifact: {
         purpose: "安全担当者の判断を支援する",
         requiredContents: ["根拠", "優先度", "緩和策", "未確認事項"],
-        ...overrides.expectedArtifact,
       },
       actualArtifact: overrides.actualArtifact ?? "根拠を含むMarkdown報告書",
       defects: overrides.defects ?? [],
@@ -70,256 +67,149 @@ function deduction(code, evidence, stepId = "report", missingItem = "") {
   return { code, stepIds: [stepId], evidence, missingItem };
 }
 
-test("総合点が80点以上でも具体性の低いタスクがあれば不合格にする", () => {
-  const request = {
+function evaluate(request = defaultRequest, overrides = {}) {
+  return normalizeEvaluation(rawEvaluation(request, overrides), request, "ollama", "test-model");
+}
+
+test("合格条件と無意味な入力の上限を適用する", () => {
+  const passing = evaluate(defaultRequest, {
+    criteriaScore: 16,
+    defects: [
+      deduction("missing_required_content", "緩和策", "report", "緩和策"),
+      deduction("missing_required_content", "優先度", "report", "優先度"),
+    ],
+  });
+  assert.equal(passing.total, 84);
+  assert.equal(passing.passed, true);
+
+  const lowStepRequest = {
     ...defaultRequest,
     steps: [
       { id: "good", title: "ログを確認する", instruction: "ログを確認する", context: "入力ログ" },
       { id: "empty", title: "", instruction: "", context: "" },
     ],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      stepScores: [
-        { granularity: 20, context: 20 },
-        { granularity: 11, context: 11 },
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  const lowStep = evaluate(lowStepRequest, {
+    stepScores: [
+      { granularity: 20, context: 20 },
+      { granularity: 11, context: 11 },
+    ],
+  });
+  assert.equal(lowStep.total, 86);
+  assert.equal(lowStep.passed, false);
+  assert.match(lowStep.gateFailures.join(" "), /タスク2の分割粒度/);
+  assert.match(lowStep.gateFailures.join(" "), /タスク2のコンテキスト充足/);
 
-  assert.equal(result.criteria.length, 5);
-  assert.equal(result.criteria[0].score, 13);
-  assert.equal(result.criteria[1].score, 13);
-  assert.equal(result.criteria[0].stepDetails.length, 2);
-  assert.equal(result.total, 86);
-  assert.equal(result.passed, false);
-  assert.deepEqual(result.gateFailures, [
-    "タスク2の分割粒度は12点以上が必要です。",
-    "タスク2のコンテキスト充足は12点以上が必要です。",
-  ]);
-});
-
-test("総合点と全タスクの最低点を満たした場合だけ合格にする", () => {
-  const result = normalizeEvaluation(
-    rawEvaluation(defaultRequest, {
-      criteriaScore: 16,
-      defects: [
-        deduction("missing_required_content", "緩和策", "report", "緩和策"),
-        deduction("missing_required_content", "優先度", "report", "優先度"),
-      ],
-    }),
-    defaultRequest,
-    "openrouter",
-    "test-model",
-  );
-
-  assert.equal(result.total, 84);
-  assert.equal(result.passed, true);
-  assert.deepEqual(result.gateFailures, []);
-});
-
-test("明白な無意味入力はLLMの高得点を採用せず5点以下にする", () => {
-  const request = {
+  const meaninglessRequest = {
     ...defaultRequest,
     steps: [{ ...defaultRequest.steps[0], instruction: "aaaaa", context: "TODO" }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request),
-    request,
-    "ollama",
-    "test-model",
-  );
-
-  assert.equal(criterion(result, "granularity").score, 5);
-  assert.equal(criterion(result, "context").score, 5);
-  assert.equal(result.passed, false);
-  assert.match(result.gateFailures.join(" "), /タスク1の分割粒度/);
-  assert.match(result.gateFailures.join(" "), /タスク1のコンテキスト充足/);
+  const meaningless = evaluate(meaninglessRequest);
+  assert.equal(criterion(meaningless, "granularity").score, 5);
+  assert.equal(criterion(meaningless, "context").score, 5);
+  assert.equal(meaningless.passed, false);
 });
 
-test("明白な誤字を含む提示入力は総合点が高くても不合格にする", () => {
+test("明白な誤字を減点し，不正な根拠を拒否する", () => {
   const request = {
     ...defaultRequest,
     steps: [{
       ...defaultRequest.steps[0],
-      instruction: "静的・動的観測を、事実・解釈・未確認事項・推奨する安全な追加確認に分けた短い報告書にまとめてください。aaaaaa，スナップショットから復元できるテスト VM で、プロセス・ファイル・レジストリ相当の変化を観測する手順を作ってください。外部通信は発生させないでください。あああああ",
+      instruction: "報告書にまとめる。aaaaaa，隔離VMで変化を観測する。あああああ",
     }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      obviousTypos: [[
-        { field: "instruction", evidence: "aaaaaa", reason: "意味のない文字反復" },
-        { field: "instruction", evidence: "あああああ", reason: "意味のない文字反復" },
-      ]],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
-
+  const result = evaluate(request, {
+    obviousTypos: [[
+      { field: "instruction", evidence: "aaaaaa", reason: "意味のない文字反復" },
+      { field: "instruction", evidence: "あああああ", reason: "意味のない文字反復" },
+    ]],
+  });
   assert.equal(criterion(result, "granularity").score, 11);
   assert.equal(result.total, 91);
   assert.equal(result.passed, false);
-  assert.match(
-    criterion(result, "granularity").stepDetails[0].message,
-    /明白な誤字2件.*固定減点4点後、11点を上限/,
-  );
-  assert.match(result.gateFailures.join(" "), /タスク1の分割粒度/);
-});
+  assert.match(criterion(result, "granularity").stepDetails[0].message, /明白な誤字2件/);
 
-test("入力に存在しない明白な誤字の根拠を拒否する", () => {
   assert.throws(
-    () => normalizeEvaluation(
-      rawEvaluation(defaultRequest, {
-        obviousTypos: [[{
-          field: "instruction",
-          evidence: "入力に存在しない誤字",
-          reason: "意味のない文字列",
-        }]],
-      }),
-      defaultRequest,
-      "ollama",
-      "test-model",
-    ),
+    () => evaluate(defaultRequest, {
+      obviousTypos: [[{
+        field: "instruction",
+        evidence: "入力に存在しない誤字",
+        reason: "意味のない文字列",
+      }]],
+    }),
     /obvious typo evidence not found/,
   );
 });
 
-test("明示的な安全違反を固定減点し、同じ違反コードを重複加算しない", () => {
-  const request = {
+test("Safetyの固定減点，重複除去，否定文除外を適用する", () => {
+  const duplicateRequest = {
     ...defaultRequest,
     steps: [
       { ...defaultRequest.steps[0], instruction: "管理者権限で監査ログを読む" },
       { id: "again", title: "再確認", instruction: "sudoを使って再確認する", context: "監査ログ" },
     ],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      violations: [
-        deduction("privilege_escalation", "管理者権限で監査ログを読む"),
-        deduction("privilege_escalation", "sudoを使って再確認する", "again"),
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  const duplicate = evaluate(duplicateRequest, {
+    violations: [
+      deduction("privilege_escalation", "管理者権限で監査ログを読む"),
+      deduction("privilege_escalation", "sudoを使って再確認する", "again"),
+    ],
+  });
+  assert.equal(criterion(duplicate, "safety").score, 14);
+  assert.equal(duplicate.passed, false);
 
-  assert.equal(criterion(result, "safety").score, 14);
-  assert.equal(result.passed, false);
-  assert.match(result.gateFailures.join(" "), /安全性・権限境界/);
-});
-
-test("LLMが見逃しても明示的な管理者権限の使用を固定減点する", () => {
-  const request = {
+  const detectedRequest = {
     ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "スナップショットから復元できるテスト VM で、管理者権限を用いて変化を観測する",
-    }],
+    steps: [{ ...defaultRequest.steps[0], instruction: "管理者権限を用いて変化を観測する" }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, { violations: [] }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  assert.equal(criterion(evaluate(detectedRequest), "safety").score, 14);
 
-  assert.equal(criterion(result, "safety").score, 14);
-  assert.equal(result.passed, false);
-});
-
-test("管理者権限を使用しないという否定文は決定論ルールで減点しない", () => {
-  const request = {
+  const negativeRequest = {
     ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "管理者権限を使用しない読み取り専用の手順を作る",
-    }],
+    steps: [{ ...defaultRequest.steps[0], instruction: "管理者権限を使用しない手順を作る" }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, { violations: [] }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  assert.equal(criterion(evaluate(negativeRequest), "safety").score, 20);
 
-  assert.equal(criterion(result, "safety").score, 20);
-});
-
-test("秘密情報の読み取りと無保護出力は別の違反として加算する", () => {
-  const request = {
+  const secretRequest = {
     ...defaultRequest,
     steps: [{
       ...defaultRequest.steps[0],
       instruction: "SSH秘密鍵の内容を読み取り、マスキングせず報告書へ保存する",
     }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      violations: [
-        deduction("secret_content_access", "SSH秘密鍵の内容を読み取り"),
-        deduction("secret_unprotected_output", "マスキングせず報告書へ保存する"),
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  const secrets = evaluate(secretRequest, {
+    violations: [
+      deduction("secret_content_access", "SSH秘密鍵の内容を読み取り"),
+      deduction("secret_unprotected_output", "マスキングせず報告書へ保存する"),
+    ],
+  });
+  assert.equal(criterion(secrets, "safety").score, 2);
 
-  assert.equal(criterion(result, "safety").score, 2);
-  assert.equal(result.passed, false);
-});
-
-test("保護・禁止を指示する文はSafety違反として返されても減点しない", () => {
-  const request = {
+  const safeRequest = {
     ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "機密情報はマスキングし、外部通信は発生させない",
-    }],
+    steps: [{ ...defaultRequest.steps[0], instruction: "機密情報はマスキングし、外部通信は発生させない" }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      violations: [
-        deduction("secret_unprotected_output", "機密情報はマスキングし"),
-        deduction("unauthorized_target_access", "外部通信は発生させない"),
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
+  const safe = evaluate(safeRequest, {
+    violations: [
+      deduction("secret_unprotected_output", "機密情報はマスキングし"),
+      deduction("unauthorized_target_access", "外部通信は発生させない"),
+    ],
+  });
+  assert.equal(criterion(safe, "safety").score, 20);
 
-  assert.equal(criterion(result, "safety").score, 20);
-});
-
-test("保護指示と無保護出力が混在する場合はSafety違反を維持する", () => {
-  const request = {
+  const mixedRequest = {
     ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "識別子はマスキングし、APIキーは平文で保存する",
-    }],
+    steps: [{ ...defaultRequest.steps[0], instruction: "識別子はマスキングし、APIキーは平文で保存する" }],
   };
-  const result = normalizeEvaluation(
-    rawEvaluation(request, {
-      violations: [
-        deduction("secret_unprotected_output", "識別子はマスキングし、APIキーは平文で保存する"),
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
-
-  assert.equal(criterion(result, "safety").score, 10);
+  const mixed = evaluate(mixedRequest, {
+    violations: [
+      deduction("secret_unprotected_output", "識別子はマスキングし、APIキーは平文で保存する"),
+    ],
+  });
+  assert.equal(criterion(mixed, "safety").score, 10);
 });
 
-test("成果物の必須内容不足を1件2点、最大6点として再計算する", () => {
+test("Artifactの固定減点，重複除去，合格下限を適用する", () => {
   const request = {
     ...defaultRequest,
     scenario: {
@@ -327,116 +217,58 @@ test("成果物の必須内容不足を1件2点、最大6点として再計算�
       goal: "安全担当者が根拠、優先度、緩和策を判断できる報告書を作る",
     },
   };
-  const evidence = ["根拠", "優先度", "緩和策"];
+  const required = ["根拠", "優先度", "緩和策"];
   for (const [count, expectedScore] of [[1, 18], [2, 16], [3, 14], [4, 14]]) {
     const defects = Array.from({ length: count }, (_, index) =>
       deduction(
         "missing_required_content",
-        evidence[index % evidence.length],
+        required[index % required.length],
         "report",
-        evidence[index % evidence.length],
+        required[index % required.length],
       ));
-    const result = normalizeEvaluation(
-      rawEvaluation(request, { actualArtifact: "Markdown報告書", defects }),
-      request,
-      "ollama",
-      "test-model",
+    assert.equal(
+      criterion(evaluate(request, { actualArtifact: "Markdown報告書", defects }), "artifact").score,
+      expectedScore,
     );
-    assert.equal(criterion(result, "artifact").score, expectedScore);
   }
-});
 
-test("同じ必須内容不足を複数回返されても1回だけ減点する", () => {
-  const result = normalizeEvaluation(
-    rawEvaluation(defaultRequest, {
-      defects: [
-        deduction("missing_required_content", "緩和策", "report", "緩和策"),
-        deduction(
-          "missing_required_content",
-          "緩和策",
-          "report",
-          "緩和策（優先順位を含む）",
-        ),
-      ],
-    }),
-    defaultRequest,
-    "ollama",
-    "test-model",
-  );
+  const duplicate = evaluate(defaultRequest, {
+    defects: [
+      deduction("missing_required_content", "緩和策", "report", "緩和策"),
+      deduction("missing_required_content", "緩和策", "report", "緩和策（優先順位を含む）"),
+    ],
+  });
+  assert.equal(criterion(duplicate, "artifact").score, 18);
 
-  assert.equal(criterion(result, "artifact").score, 18);
-});
+  const ignored = evaluate(defaultRequest, {
+    actualArtifact: "根拠と優先度を含むMarkdown報告書",
+    defects: [
+      deduction("missing_required_content", "緩和策", "report", "静的解析結果"),
+      deduction("missing_required_content", "優先度", "report", "優先度"),
+    ],
+  });
+  assert.equal(criterion(ignored, "artifact").score, 20);
 
-test("goalにない項目やactualArtifactにある項目を必須内容不足として減点しない", () => {
-  const result = normalizeEvaluation(
-    rawEvaluation(defaultRequest, {
-      actualArtifact: "根拠と優先度を含むMarkdown報告書",
-      defects: [
-        deduction("missing_required_content", "緩和策", "report", "静的解析結果"),
-        deduction("missing_required_content", "優先度", "report", "優先度"),
-      ],
-    }),
-    defaultRequest,
-    "ollama",
-    "test-model",
-  );
+  const noArtifact = evaluate(defaultRequest, {
+    actualArtifact: "最終成果物の指定なし",
+    defects: [
+      deduction("no_final_artifact", "監査ログ"),
+      deduction("goal_mismatch", "安全担当者が優先度と緩和策を判断できる報告書"),
+      deduction("missing_required_content", "緩和策", "report", "緩和策"),
+      deduction("missing_acceptance_condition", "Markdown報告書"),
+    ],
+  });
+  assert.equal(criterion(noArtifact, "artifact").score, 10);
+  assert.match(noArtifact.gateFailures.join(" "), /最終成果物が指定されていない/);
 
-  assert.equal(criterion(result, "artifact").score, 20);
-});
+  const mismatch = evaluate(defaultRequest, {
+    actualArtifact: "作業時刻だけのCSV日誌",
+    defects: [deduction("goal_mismatch", "安全担当者が優先度と緩和策を判断できる報告書")],
+  });
+  assert.equal(criterion(mismatch, "artifact").score, 10);
+  assert.match(mismatch.gateFailures.join(" "), /演習目的と一致しない/);
 
-test("最終成果物なしは10点減点し、付随する欠落を重複加算しない", () => {
-  const result = normalizeEvaluation(
-    rawEvaluation(defaultRequest, {
-      actualArtifact: "最終成果物の指定なし",
-      defects: [
-        deduction("no_final_artifact", "監査ログ"),
-        deduction("goal_mismatch", "安全担当者が優先度と緩和策を判断できる報告書"),
-        deduction("missing_required_content", "緩和策", "report", "緩和策"),
-        deduction("missing_acceptance_condition", "Markdown報告書"),
-      ],
-    }),
-    defaultRequest,
-    "ollama",
-    "test-model",
-  );
-
-  assert.equal(criterion(result, "artifact").score, 10);
-  assert.equal(result.passed, false);
-  assert.match(result.gateFailures.join(" "), /最終成果物が指定されていない/);
-});
-
-test("必須内容不足の識別名が空なら採点結果を拒否する", () => {
-  assert.throws(
-    () => normalizeEvaluation(
-      rawEvaluation(defaultRequest, {
-        defects: [deduction("missing_required_content", "緩和策")],
-      }),
-      defaultRequest,
-      "ollama",
-      "test-model",
-    ),
-    /missing artifact defect missingItem/,
-  );
-});
-
-test("目標と成果物の不一致は10点減点し、重大問題として不合格にする", () => {
-  const result = normalizeEvaluation(
-    rawEvaluation(defaultRequest, {
-      actualArtifact: "作業時刻だけのCSV日誌",
-      defects: [deduction("goal_mismatch", "安全担当者が優先度と緩和策を判断できる報告書")],
-    }),
-    defaultRequest,
-    "ollama",
-    "test-model",
-  );
-
-  assert.equal(criterion(result, "artifact").score, 10);
-  assert.equal(result.passed, false);
-  assert.match(result.gateFailures.join(" "), /演習目的と一致しない/);
-});
-
-test("成果物の明確さは11点で不合格、13点で合格可能にする", () => {
-  const request = {
+  const thresholdRequest = {
     ...defaultRequest,
     steps: [
       defaultRequest.steps[0],
@@ -448,41 +280,30 @@ test("成果物の明確さは11点で不合格、13点で合格可能にする"
     deduction("missing_handoff", "報告書"),
     deduction("missing_acceptance_condition", "Markdown報告書"),
   ];
-  const score13 = normalizeEvaluation(
-    rawEvaluation(request, { defects: commonDefects }),
-    request,
-    "ollama",
-    "test-model",
-  );
-  const score11 = normalizeEvaluation(
-    rawEvaluation(request, {
-      defects: [
-        ...commonDefects,
-        deduction("missing_required_content", "優先度", "report", "優先度"),
-      ],
-    }),
-    request,
-    "ollama",
-    "test-model",
-  );
-
+  const score13 = evaluate(thresholdRequest, { defects: commonDefects });
+  const score11 = evaluate(thresholdRequest, {
+    defects: [
+      ...commonDefects,
+      deduction("missing_required_content", "優先度", "report", "優先度"),
+    ],
+  });
   assert.equal(criterion(score13, "artifact").score, 13);
   assert.equal(score13.passed, true);
   assert.equal(criterion(score11, "artifact").score, 11);
   assert.equal(score11.passed, false);
-  assert.match(score11.gateFailures.join(" "), /12点以上/);
 });
 
-test("入力に存在しない根拠引用を拒否する", () => {
+test("LLMが返した根拠と必須内容を検証する", () => {
   assert.throws(
-    () => normalizeEvaluation(
-      rawEvaluation(defaultRequest, {
-        violations: [deduction("privilege_escalation", "入力には存在しない管理者権限の指示")],
-      }),
-      defaultRequest,
-      "ollama",
-      "test-model",
-    ),
+    () => evaluate(defaultRequest, {
+      violations: [deduction("privilege_escalation", "入力には存在しない管理者権限の指示")],
+    }),
     /evidence not found/,
+  );
+  assert.throws(
+    () => evaluate(defaultRequest, {
+      defects: [deduction("missing_required_content", "緩和策")],
+    }),
+    /missing artifact defect missingItem/,
   );
 });

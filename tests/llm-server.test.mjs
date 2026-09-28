@@ -101,7 +101,7 @@ test("Ollamaの不正JSONを1回だけ再試行する", async () => {
   }
 });
 
-test("Ollamaのコンテキスト長が8192未満なら採点前に拒否する", async () => {
+test("大きさの制限を超えるOllama設定と採点要求を送信前に拒否する", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -120,9 +120,7 @@ test("Ollamaのコンテキスト長が8192未満なら採点前に拒否する"
   } finally {
     globalThis.fetch = originalFetch;
   }
-});
 
-test("コンテキストへ収まらない長い採点要求をLLM送信前に拒否する", () => {
   assert.throws(
     () => parseEvaluationRequest({
       ...request,
