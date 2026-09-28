@@ -5,6 +5,7 @@ import { tsImport } from "tsx/esm/api";
 const {
   EvaluationServiceError,
   evaluatePlanWithLlm,
+  parseEvaluationRequest,
 } = await tsImport("../app/lib/llm/server.ts", import.meta.url);
 
 const request = {
@@ -23,7 +24,7 @@ const request = {
 };
 
 const validEvaluation = {
-  criteria: ["granularity", "context", "safety", "verifiability", "artifact"].map((id) => ({
+  criteria: ["granularity", "context", "verifiability"].map((id) => ({
     id,
     score: 20,
     message: `${id}を確認した`,
@@ -34,29 +35,18 @@ const validEvaluation = {
     title: "結果を報告する",
     granularity: { score: 20, message: "具体的である" },
     context: { score: 20, message: "必要な情報がある" },
+    obviousTypos: [],
   }],
   safetyAssessment: {
-    checks: [
-      "authorized_scope",
-      "least_privilege",
-      "secret_protection",
-      "change_and_network_boundary",
-      "stop_and_recovery",
-    ].map((id) => ({ id, status: "met", reason: `${id}を確認した` })),
     violations: [],
-    summary: "安全要件を満たす",
   },
   artifactAssessment: {
     expectedArtifact: {
       purpose: "確認結果を伝える",
       requiredContents: ["確認結果"],
-      audience: "",
-      format: "報告書",
-      destination: "",
     },
     actualArtifact: "確認結果の報告書",
     defects: [],
-    summary: "目標と整合する",
   },
   strengths: ["具体的である"],
   improvements: [],
@@ -130,4 +120,19 @@ test("Ollamaのコンテキスト長が8192未満なら採点前に拒否する"
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("コンテキストへ収まらない長い採点要求をLLM送信前に拒否する", () => {
+  assert.throws(
+    () => parseEvaluationRequest({
+      ...request,
+      steps: [
+        { ...request.steps[0], id: "long-1", instruction: "調".repeat(4_000) },
+        { ...request.steps[0], id: "long-2", instruction: "査".repeat(4_000) },
+      ],
+    }),
+    (error) => error instanceof EvaluationServiceError
+      && error.status === 400
+      && /8000文字以内/.test(error.publicMessage),
+  );
 });
