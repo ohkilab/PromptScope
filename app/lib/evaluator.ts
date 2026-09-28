@@ -1,3 +1,5 @@
+import type { EvaluationProfile } from "./exercises";
+
 /** A single analysis task authored in the trainer. */
 export type AnalysisStep = {
   id: string;
@@ -50,6 +52,8 @@ export type EvaluationRequest = {
     description: string;
     goal: string;
     environment: string;
+    materials?: string;
+    evaluationProfile?: EvaluationProfile;
   };
   steps: AnalysisStep[];
 };
@@ -444,6 +448,7 @@ function evaluationInputText(request: EvaluationRequest): string {
     request.scenario.description,
     request.scenario.goal,
     request.scenario.environment,
+    request.scenario.materials ?? "",
     ...request.steps.flatMap((step) => [step.title, step.instruction, step.context]),
   ].join("\n"));
 }
