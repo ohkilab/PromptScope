@@ -84,16 +84,21 @@ async function withOllamaEnvironment(contextLength, callback) {
 test("Ollamaの不正JSONを1回だけ再試行する", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async () => {
+  let requestBody;
+  globalThis.fetch = async (_input, init) => {
     calls += 1;
+    requestBody = JSON.parse(init.body);
     return calls === 1
       ? ollamaResponse("{")
       : ollamaResponse(JSON.stringify(validEvaluation));
   };
 
   try {
-    const result = await withOllamaEnvironment(8_192, () => evaluatePlanWithLlm(request));
+    const result = await withOllamaEnvironment(32_768, () => evaluatePlanWithLlm(request));
     assert.equal(calls, 2);
+    assert.equal(requestBody.think, true);
+    assert.equal(requestBody.options.num_ctx, 32_768);
+    assert.equal(requestBody.options.num_predict, 12_000);
     assert.equal(result.total, 100);
     assert.equal(result.passed, true);
   } finally {
@@ -111,10 +116,10 @@ test("大きさの制限を超えるOllama設定と採点要求を送信前に�
 
   try {
     await assert.rejects(
-      withOllamaEnvironment(4_096, () => evaluatePlanWithLlm(request)),
+      withOllamaEnvironment(8_192, () => evaluatePlanWithLlm(request)),
       (error) => error instanceof EvaluationServiceError
         && error.status === 503
-        && /8192以上/.test(error.publicMessage),
+        && /32768以上/.test(error.publicMessage),
     );
     assert.equal(calls, 0);
   } finally {

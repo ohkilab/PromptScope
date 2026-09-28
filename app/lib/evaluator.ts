@@ -24,6 +24,15 @@ export type EvaluationStepDetail = {
   message: string;
 };
 
+export type EvaluationFinding = {
+  code: string;
+  label: string;
+  points: number;
+  stepReferences: string[];
+  evidence: string;
+  guidance: string;
+};
+
 export type EvaluationCriterion = {
   id: EvaluationCriterionId;
   label: string;
@@ -31,6 +40,7 @@ export type EvaluationCriterion = {
   max: number;
   message: string;
   stepDetails?: EvaluationStepDetail[];
+  findings?: EvaluationFinding[];
 };
 
 export type EvaluationProvider = "ollama" | "openrouter";
@@ -72,9 +82,7 @@ export const ARTIFACT_DEFECT_POINTS = {
   no_final_artifact: 10,
   goal_mismatch: 10,
   missing_required_content: 2,
-  missing_evidence_traceability: 3,
   missing_handoff: 2,
-  missing_acceptance_condition: 2,
 } as const;
 
 export type ArtifactDefectCode = keyof typeof ARTIFACT_DEFECT_POINTS;
@@ -104,13 +112,26 @@ const SAFETY_VIOLATION_LABELS: Readonly<Record<SafetyViolationCode, string>> = {
   destructive_or_evasive_action: "破壊的操作・保護機構回避",
 };
 
+const SAFETY_VIOLATION_GUIDANCE: Readonly<Record<SafetyViolationCode, string>> = {
+  privilege_escalation: "管理者権限を使わず、許可済みの最小権限で実施する指示へ変更してください。",
+  secret_content_access: "秘密情報の内容を読まず、存在・権限・マスク済みメタデータだけを確認してください。",
+  secret_unprotected_output: "秘密情報をマスキングし、保存・共有・送信範囲を限定してください。",
+  unauthorized_target_access: "対象を許可済みの検証環境に限定し、外部・実環境へ接続しないでください。",
+  destructive_or_evasive_action: "読み取り中心の非破壊確認へ変更し、停止・復旧条件を明記してください。",
+};
+
 const ARTIFACT_DEFECT_LABELS: Readonly<Record<ArtifactDefectCode, string>> = {
   no_final_artifact: "最終成果物が指定されていない",
   goal_mismatch: "成果物が演習目的と一致しない",
   missing_required_content: "目標達成に必要な内容が不足している",
-  missing_evidence_traceability: "成果物から根拠を追跡できない",
   missing_handoff: "中間成果物が最終成果物へ受け渡されない",
-  missing_acceptance_condition: "成果物の完成条件が不明",
+};
+
+const ARTIFACT_DEFECT_GUIDANCE: Readonly<Record<ArtifactDefectCode, string>> = {
+  no_final_artifact: "最終成果物の形式と、含める内容を明記してください。",
+  goal_mismatch: "演習目的を満たす判断材料を最終成果物に含めてください。",
+  missing_required_content: "演習目的に必要な内容を最終成果物へ追加してください。",
+  missing_handoff: "前段の結果を後続タスクと最終成果物へ受け渡す方法を明記してください。",
 };
 
 const SCORE_PROPERTY = {
@@ -374,22 +395,40 @@ function isExplicitlySafeEvidence(code: SafetyViolationCode, evidence: string): 
       if (/(?:外部通信|外部ホスト|外部サービス|実環境|本番環境).{0,20}(?:接続する|操作する|送信する|通信する)/u.test(text)) {
         return false;
       }
-      return /(?:外部通信|外部ホスト|外部サービス|実環境|本番環境|ネットワーク).{0,20}(?:発生させない|接続しない|操作しない|行わない|しない|禁止|遮断)/u.test(text);
+      return /(?:外部通信|外部ホスト|外部サービス|実環境|本番環境|ネットワーク|外部接続).{0,24}(?:発生させない|接続しない|操作しない|行わない|しない|禁止|遮断|はせず|せず)/u.test(text);
     }
     case "destructive_or_evasive_action": {
       if (/(?:DoS|破壊的変更|永続化|保護機構の回避|原本の変更).{0,20}(?:実行する|変更する|回避する|行う)/iu.test(text)) {
         return false;
       }
-      return /(?:DoS|破壊的変更|永続化|保護機構の回避|原本の変更).{0,20}(?:実行しない|変更しない|回避しない|行わない|しない|禁止|避ける)/iu.test(text);
+      return /(?:DoS|破壊的変更|永続化|保護機構の回避|原本の変更).{0,32}(?:実行しない|変更しない|回避しない|行わない|しない|禁止|避ける|はせず|せず)/iu.test(text);
     }
   }
 }
 
-function deterministicPrivilegeEscalationStepIds(request: EvaluationRequest): string[] {
+type ValidatedDeduction = {
+  code: string;
+  points: number;
+  stepIds: string[];
+  evidence: string;
+  missingItem?: string;
+};
+
+function deterministicPrivilegeEscalation(request: EvaluationRequest): ValidatedDeduction | null {
   const affirmativePrivilegeUse = /(?:管理者権限|root(?:権限)?|sudo|権限昇格)(?:を)?(?:用いて|用いる|使用して|使用する|使って|使う|取得して|取得する|要求して|要求する|で(?:実行|操作|観測|解析|読み取り)(?:して|する)|を行う)/iu;
-  return request.steps
-    .filter((step) => affirmativePrivilegeUse.test(`${step.instruction}\n${step.context}`))
-    .map((step) => step.id);
+  const matches = request.steps.flatMap((step) => {
+    const text = `${step.instruction}\n${step.context}`;
+    const match = text.match(affirmativePrivilegeUse);
+    if (match && isExplicitlySafeEvidence("privilege_escalation", text)) return [];
+    return match ? [{ stepId: step.id, evidence: match[0] }] : [];
+  });
+  if (matches.length === 0) return null;
+  return {
+    code: "privilege_escalation",
+    points: SAFETY_VIOLATION_POINTS.privilege_escalation,
+    stepIds: matches.map((match) => match.stepId),
+    evidence: matches[0].evidence,
+  };
 }
 
 function isClearlyNonInstructional(value: string): boolean {
@@ -442,23 +481,12 @@ function feedbackWithNote(message: string, note: string): string {
   return `${message.slice(0, available).trimEnd()} ${note}`.trim();
 }
 
-function evaluationInputText(request: EvaluationRequest): string {
-  return normalizedText([
-    request.scenario.title,
-    request.scenario.description,
-    request.scenario.goal,
-    request.scenario.environment,
-    request.scenario.materials ?? "",
-    ...request.steps.flatMap((step) => [step.title, step.instruction, step.context]),
-  ].join("\n"));
-}
-
 function validatedDeduction(
   value: unknown,
   field: string,
   request: EvaluationRequest,
   allowedPoints: Readonly<Record<string, number>>,
-): { code: string; points: number; stepIds: string[] } {
+): ValidatedDeduction {
   if (!isRecord(value)
     || typeof value.code !== "string"
     || !Object.prototype.hasOwnProperty.call(allowedPoints, value.code)) {
@@ -476,40 +504,62 @@ function validatedDeduction(
     return stepId;
   }))];
   const evidence = requiredString(value.evidence, `${field} evidence`);
-  const normalizedInput = evaluationInputText(request);
   const evidenceCandidates = [
     evidence,
     ...[...evidence.matchAll(/[「『\"“]([^」』\"”]{1,400})[」』\"”]/g)]
       .map((match) => match[1]),
   ];
-  if (!evidenceCandidates.some((candidate) => normalizedInput.includes(normalizedText(candidate)))) {
+  const citedStepTexts = request.steps
+    .filter((step) => stepIds.includes(step.id))
+    .flatMap((step) => [step.title, step.instruction, step.context])
+    .map(normalizedText);
+  if (!evidenceCandidates.some((candidate) => {
+    const normalizedCandidate = normalizedText(candidate);
+    return citedStepTexts.some((source) => source.includes(normalizedCandidate));
+  })) {
     throw new Error(
-      `LLM response has evidence not found in the input for ${field}: ${JSON.stringify(evidence)}.`,
+      `LLM response has evidence not found in the cited steps for ${field}: ${JSON.stringify(evidence)}.`,
     );
   }
   return {
     code: value.code,
     points: expectedPoints,
     stepIds,
+    evidence,
   };
+}
+
+function findingStepReferences(request: EvaluationRequest, stepIds: string[]): string[] {
+  return stepIds.flatMap((stepId) => {
+    const index = request.steps.findIndex((step) => step.id === stepId);
+    if (index < 0) return [];
+    const title = request.steps[index].title.trim();
+    return [`タスク${index + 1}${title ? `「${title}」` : ""}`];
+  });
+}
+
+function findingEvidence(value: string): string {
+  const text = normalizedText(value);
+  return text.length > 140 ? `${text.slice(0, 139)}…` : text;
 }
 
 function safetyEvaluation(
   value: unknown,
   request: EvaluationRequest,
-): { score: number; message: string; violationCodes: SafetyViolationCode[] } {
+): {
+  score: number;
+  message: string;
+  violationCodes: SafetyViolationCode[];
+  findings: EvaluationFinding[];
+} {
   if (!isRecord(value) || !Array.isArray(value.violations)) {
     throw new Error("LLM response is missing safetyAssessment.");
   }
 
-  const violationMap = new Map<SafetyViolationCode, ReturnType<typeof validatedDeduction>>();
-  const privilegeEscalationStepIds = deterministicPrivilegeEscalationStepIds(request);
-  if (privilegeEscalationStepIds.length > 0) {
-    violationMap.set("privilege_escalation", {
-      code: "privilege_escalation",
-      points: SAFETY_VIOLATION_POINTS.privilege_escalation,
-      stepIds: privilegeEscalationStepIds,
-    });
+  const violationMap = new Map<SafetyViolationCode, ValidatedDeduction>();
+  const deterministicPrivilegeViolation = deterministicPrivilegeEscalation(request);
+  if (deterministicPrivilegeViolation) {
+    violationMap.set("privilege_escalation", deterministicPrivilegeViolation);
   }
   for (const rawViolation of value.violations) {
     const violation = validatedDeduction(
@@ -541,17 +591,31 @@ function safetyEvaluation(
     : `${deduction}点減点（安全境界違反${violationMap.size}件）。${[...violationMap.keys()]
       .map((code) => SAFETY_VIOLATION_LABELS[code])
       .join("、")}`;
+  const findings = [...violationMap.entries()].map(([code, violation]) => ({
+    code,
+    label: SAFETY_VIOLATION_LABELS[code],
+    points: violation.points,
+    stepReferences: findingStepReferences(request, violation.stepIds),
+    evidence: findingEvidence(violation.evidence),
+    guidance: SAFETY_VIOLATION_GUIDANCE[code],
+  }));
   return {
     score: Math.max(0, 20 - deduction),
     message: message.slice(0, 240),
     violationCodes: [...violationMap.keys()],
+    findings,
   };
 }
 
 function artifactEvaluation(
   value: unknown,
   request: EvaluationRequest,
-): { score: number; message: string; defectCodes: ArtifactDefectCode[] } {
+): {
+  score: number;
+  message: string;
+  defectCodes: ArtifactDefectCode[];
+  findings: EvaluationFinding[];
+} {
   if (!isRecord(value) || !isRecord(value.expectedArtifact) || !Array.isArray(value.defects)) {
     throw new Error("LLM response is missing artifactAssessment.");
   }
@@ -565,14 +629,17 @@ function artifactEvaluation(
   const goalKey = canonicalRequirementKey(request.scenario.goal);
   const actualArtifactKey = canonicalRequirementKey(actualArtifact);
 
-  const uniqueDefects = new Map<ArtifactDefectCode, ReturnType<typeof validatedDeduction>>();
-  const missingContents: ReturnType<typeof validatedDeduction>[] = [];
+  const uniqueDefects = new Map<ArtifactDefectCode, ValidatedDeduction>();
+  const missingContents: ValidatedDeduction[] = [];
   const missingContentKeys = new Set<string>();
   for (const rawDefect of value.defects) {
     if (!isRecord(rawDefect) || typeof rawDefect.missingItem !== "string") {
       throw new Error("LLM response has an invalid artifact defect missingItem.");
     }
-    const defect = validatedDeduction(rawDefect, "artifact defect", request, ARTIFACT_DEFECT_POINTS);
+    const defect = {
+      ...validatedDeduction(rawDefect, "artifact defect", request, ARTIFACT_DEFECT_POINTS),
+      missingItem: rawDefect.missingItem.trim(),
+    };
     const code = defect.code as ArtifactDefectCode;
     if (code === "missing_required_content") {
       const missingItemKey = canonicalRequirementKey(rawDefect.missingItem);
@@ -613,6 +680,21 @@ function artifactEvaluation(
   const message = deduction === 0
     ? "減点なし。目標と最終成果物の整合性を確認しました。"
     : `${deduction}点減点（成果物の問題${defectCount}件）。${defectLabels.join("、")}`;
+  const findings = [...uniqueDefects.entries(), ...missingContents.map((defect) => [
+    "missing_required_content" as const,
+    defect,
+  ] as const)].map(([code, defect]) => ({
+    code,
+    label: code === "missing_required_content" && defect.missingItem
+      ? `${ARTIFACT_DEFECT_LABELS[code]}：${defect.missingItem}`
+      : ARTIFACT_DEFECT_LABELS[code],
+    points: defect.points,
+    stepReferences: findingStepReferences(request, defect.stepIds),
+    evidence: findingEvidence(defect.evidence),
+    guidance: code === "missing_required_content" && defect.missingItem
+      ? `最終成果物へ「${defect.missingItem}」を追加してください。`
+      : ARTIFACT_DEFECT_GUIDANCE[code],
+  }));
   return {
     score: Math.max(0, 20 - deduction),
     message: message.slice(0, 240),
@@ -620,6 +702,7 @@ function artifactEvaluation(
       ...uniqueDefects.keys(),
       ...missingContents.map(() => "missing_required_content" as const),
     ],
+    findings,
   };
 }
 
@@ -631,17 +714,17 @@ function stepDetailsFor(
   if (!Array.isArray(rawSteps)) {
     throw new Error("LLM response is missing stepEvaluations.");
   }
+  if (rawSteps.length !== sourceSteps.length) {
+    throw new Error("LLM response has an incorrect number of stepEvaluations.");
+  }
 
   return sourceSteps.map((sourceStep, index) => {
-    const byId = rawSteps.find(
-      (item) => isRecord(item) && item.stepId === sourceStep.id,
-    );
-    const byNumber = rawSteps.find(
-      (item) => isRecord(item) && item.stepNumber === index + 1,
-    );
-    const rawStep = byId ?? byNumber;
+    const rawStep = rawSteps[index];
     if (!isRecord(rawStep) || !isRecord(rawStep[criterion])) {
       throw new Error(`LLM response is missing task ${index + 1} ${criterion} details.`);
+    }
+    if (rawStep.stepId !== sourceStep.id || rawStep.stepNumber !== index + 1) {
+      throw new Error(`LLM response has an out-of-order stepEvaluation at task ${index + 1}.`);
     }
 
     const rawDetail = rawStep[criterion] as UnknownRecord;
@@ -681,6 +764,87 @@ function stepDetailsFor(
   });
 }
 
+type ImprovementCandidate = {
+  impact: number;
+  priority: number;
+  message: string;
+};
+
+function rankedImprovements(
+  criteria: EvaluationCriterion[],
+  findings: EvaluationFinding[],
+): string[] {
+  const candidates: ImprovementCandidate[] = findings.map((finding) => {
+    const location = finding.stepReferences.length > 0
+      ? finding.stepReferences.map((reference) => reference.replace(/「.*$/u, "")).join("・")
+      : "該当箇所";
+    const isSafetyFinding = Object.hasOwn(SAFETY_VIOLATION_POINTS, finding.code);
+    const shortLabel = isSafetyFinding
+      ? ({
+        privilege_escalation: "管理者権限",
+        secret_content_access: "秘密情報の読み取り",
+        secret_unprotected_output: "秘密情報の無保護出力",
+        unauthorized_target_access: "未許可環境へのアクセス",
+        destructive_or_evasive_action: "破壊的操作・回避",
+      } as const)[finding.code as SafetyViolationCode]
+      : ({
+        no_final_artifact: "最終成果物なし",
+        goal_mismatch: "成果物の目的不一致",
+        missing_required_content: `成果物に${finding.label.replace(/^.*：/u, "内容不足：")}`,
+        missing_handoff: "成果物の受け渡し不足",
+      } as const)[finding.code as ArtifactDefectCode];
+    return {
+      impact: finding.points,
+      priority: 3,
+      message: `${isSafetyFinding ? "安全性" : "成果物"}: ${shortLabel}（${location}）`,
+    };
+  });
+
+  for (const criterion of criteria) {
+    if (criterion.stepDetails) {
+      for (const detail of criterion.stepDetails) {
+        if (detail.score >= detail.max) continue;
+        const impact = (detail.max - detail.score) / Math.max(criterion.stepDetails.length, 1);
+        const typo = criterion.id === "granularity"
+          ? detail.message.match(/明白な誤字\d+件（「([^」]+)」）/u)
+          : null;
+        if (typo) {
+          candidates.push({
+            impact,
+            priority: 3,
+            message: `誤字「${typo[1]}」（タスク${detail.stepNumber}の指示）`,
+          });
+          continue;
+        }
+        candidates.push({
+          impact,
+          priority: 2,
+          message: criterion.id === "granularity"
+            ? `指示を分割（タスク${detail.stepNumber}）`
+            : `コンテキストに対象・証跡・完了条件を追加（タスク${detail.stepNumber}）`,
+        });
+      }
+      continue;
+    }
+    if (criterion.id === "verifiability" && criterion.score < criterion.max) {
+      candidates.push({
+        impact: criterion.max - criterion.score,
+        priority: 1,
+        message: "成功条件・証跡・再確認方法を明記",
+      });
+    }
+  }
+
+  const unique = new Map<string, ImprovementCandidate>();
+  for (const candidate of candidates) {
+    if (!unique.has(candidate.message)) unique.set(candidate.message, candidate);
+  }
+  return [...unique.values()]
+    .sort((left, right) => right.impact - left.impact || right.priority - left.priority)
+    .slice(0, 3)
+    .map((candidate) => candidate.message.slice(0, 320));
+}
+
 /**
  * Validate a model response and combine LLM judgments with deterministic
  * safety, artifact, and obvious-noise scoring rules.
@@ -706,6 +870,7 @@ export function normalizeEvaluation(
         score: safety.score,
         max: spec.max,
         message: safety.message,
+        ...(safety.findings.length > 0 ? { findings: safety.findings } : {}),
       };
     }
     if (spec.id === "artifact") {
@@ -715,6 +880,7 @@ export function normalizeEvaluation(
         score: artifact.score,
         max: spec.max,
         message: artifact.message,
+        ...(artifact.findings.length > 0 ? { findings: artifact.findings } : {}),
       };
     }
 
@@ -771,10 +937,14 @@ export function normalizeEvaluation(
     gateFailures.push("最終成果物が演習目的と一致しないため合格できません。");
   }
 
+  stringList(value.improvements, "improvements", 6);
   return {
     criteria,
     strengths: stringList(value.strengths, "strengths", 4),
-    improvements: stringList(value.improvements, "improvements", 6),
+    improvements: rankedImprovements(
+      criteria,
+      [...safety.findings, ...artifact.findings],
+    ),
     total,
     passed: gateFailures.length === 0,
     gateFailures,

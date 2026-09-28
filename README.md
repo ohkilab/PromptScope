@@ -138,9 +138,9 @@ Copy-Item .env.example .env.local
 モデルや接続先を変更する場合は`.env.local`の`OLLAMA_MODEL`と
 `OLLAMA_BASE_URL`を編集してください。既定ではOllamaの自動判定に任せ、利用可能なら
 GPUへオフロードします。CPU実行へ固定したい場合だけ`OLLAMA_NUM_GPU=0`を設定してください。
-コンテキスト長（既定値`8192`）とバッチサイズは`OLLAMA_NUM_CTX`、`OLLAMA_NUM_BATCH`で調整できます。
-自作問題の入力資料や参照事例が多い場合は、`OLLAMA_NUM_CTX`を`16384`などに
-増やし、利用するモデルとPCのメモリに合わせて調整してください。
+コンテキスト長（既定値`32768`）とバッチサイズは`OLLAMA_NUM_CTX`、`OLLAMA_NUM_BATCH`で調整できます。
+評価プロンプトとJSON Schemaを安定して処理するため、`OLLAMA_NUM_CTX`は`32768`以上にし、
+利用するモデルとPCのメモリに合わせて調整してください。
 
 GPUを確認する場合は，採点を1回実行した直後に次を実行します．
 

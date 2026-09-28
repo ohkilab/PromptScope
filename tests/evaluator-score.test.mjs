@@ -55,7 +55,7 @@ function rawEvaluation(request = defaultRequest, overrides = {}) {
       defects: overrides.defects ?? [],
     },
     strengths: ["具体的です。"],
-    improvements: [],
+    improvements: overrides.improvements ?? [],
   };
 }
 
@@ -184,6 +184,15 @@ test("Safetyの固定減点，重複除去，否定文除外を適用する", ()
     ],
   });
   assert.equal(criterion(secrets, "safety").score, 2);
+  assert.deepEqual(
+    criterion(secrets, "safety").findings.map((finding) => finding.points),
+    [8, 10],
+  );
+  assert.equal(criterion(secrets, "safety").findings[0].stepReferences[0], "タスク1「報告書を作成する」");
+  assert.match(criterion(secrets, "safety").findings[0].evidence, /SSH秘密鍵/);
+  assert.equal(secrets.improvements.length, 2);
+  assert.match(secrets.improvements[0], /秘密情報の無保護な出力（10点減点）/);
+  assert.match(secrets.improvements[0], /マスキングせず報告書へ保存する/);
 
   const safeRequest = {
     ...defaultRequest,
@@ -259,6 +268,9 @@ test("Artifactの固定減点，重複除去，合格下限を適用する", () 
     ],
   });
   assert.equal(criterion(noArtifact, "artifact").score, 10);
+  assert.equal(criterion(noArtifact, "artifact").findings.length, 1);
+  assert.equal(criterion(noArtifact, "artifact").findings[0].evidence, "監査ログ");
+  assert.match(criterion(noArtifact, "artifact").findings[0].guidance, /最終成果物/);
   assert.match(noArtifact.gateFailures.join(" "), /最終成果物が指定されていない/);
 
   const mismatch = evaluate(defaultRequest, {
@@ -291,6 +303,32 @@ test("Artifactの固定減点，重複除去，合格下限を適用する", () 
   assert.equal(score13.passed, true);
   assert.equal(criterion(score11, "artifact").score, 11);
   assert.equal(score11.passed, false);
+});
+
+test("失点への影響が大きい改善点を具体的な上位3件に絞る", () => {
+  const request = {
+    ...defaultRequest,
+    steps: [{
+      ...defaultRequest.steps[0],
+      instruction: "APIキーを平文で外部ホストへ送信する",
+    }],
+  };
+  const result = evaluate(request, {
+    criteriaScore: 15,
+    violations: [
+      deduction("secret_unprotected_output", "APIキーを平文で外部ホストへ送信する"),
+      deduction("unauthorized_target_access", "外部ホストへ送信する"),
+    ],
+    defects: [deduction("missing_evidence_traceability", "監査ログ")],
+    improvements: ["計画をもう少し具体的にしてください。"],
+  });
+
+  assert.equal(result.improvements.length, 3);
+  assert.match(result.improvements[0], /秘密情報の無保護な出力（10点減点）/);
+  assert.match(result.improvements[1], /未許可環境へのアクセス（8点減点）/);
+  assert.match(result.improvements[2], /分割粒度は15\/20点/);
+  assert.doesNotMatch(result.improvements.join(" "), /成果物から根拠を追跡できない/);
+  assert.doesNotMatch(result.improvements.join(" "), /もう少し具体的/);
 });
 
 test("LLMが返した根拠と必須内容を検証する", () => {

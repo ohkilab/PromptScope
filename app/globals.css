@@ -1052,6 +1052,52 @@ button:disabled {
   line-height: 1.45;
 }
 
+.criterion-findings {
+  display: grid;
+  gap: 7px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.criterion-findings > li {
+  display: grid;
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--terracotta) 6%, transparent);
+}
+
+.criterion-finding-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.criterion-finding-heading strong {
+  font-weight: 650;
+}
+
+.criterion-finding-heading span {
+  flex: 0 0 auto;
+  color: var(--terracotta);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.criterion .criterion-finding-location {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.criterion .criterion-finding-evidence {
+  color: var(--terracotta);
+  overflow-wrap: anywhere;
+}
+
 .step-evaluation {
   margin-top: 4px;
   border-top: 1px dashed var(--line-strong);
@@ -1213,6 +1259,14 @@ button:disabled {
 .feedback-list li > span {
   color: var(--lime-dark);
   font-family: var(--mono);
+}
+
+.feedback-list .feedback-message {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .strength-note {

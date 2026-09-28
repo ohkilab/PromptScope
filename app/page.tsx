@@ -229,7 +229,7 @@ export default function Home() {
   const displayedCriteria = scoredEvaluation?.criteria ?? [];
   const displayedPassed = scoredEvaluation?.passed ?? false;
   const displayedFeedback = scoredEvaluation
-    ? [...scoredEvaluation.gateFailures, ...scoredEvaluation.improvements].slice(0, 3)
+    ? scoredEvaluation.improvements.slice(0, 3)
     : [];
   const scoreStatus = isEvaluating
     ? "LLMで採点中"
@@ -850,6 +850,23 @@ export default function Home() {
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
                     ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
+                    {criterion.findings && criterion.findings.length > 0 && (
+                      <ul className="criterion-findings">
+                        {criterion.findings.map((finding) => (
+                          <li key={`${criterion.id}-${finding.code}-${finding.evidence}`}>
+                            <div className="criterion-finding-heading">
+                              <strong>{finding.label}</strong>
+                              <span>−{finding.points}点</span>
+                            </div>
+                            {finding.stepReferences.length > 0 && (
+                              <p className="criterion-finding-location">{finding.stepReferences.join("・")}</p>
+                            )}
+                            <p className="criterion-finding-evidence">該当箇所「{finding.evidence}」</p>
+                            <p>{finding.guidance}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {criterion.stepDetails && criterion.stepDetails.length > 0 && (
                       <Accordion.Root className="step-evaluation" type="single" collapsible>
                         <Accordion.Item value="details">
@@ -893,7 +910,10 @@ export default function Home() {
               {!scoredEvaluation ? (
                 <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
               ) : displayedFeedback.length > 0 ? displayedFeedback.map((improvement) => (
-                <li key={improvement}><span aria-hidden="true">・</span>{improvement}</li>
+                <li key={improvement}>
+                  <span aria-hidden="true">・</span>
+                  <span className="feedback-message">{improvement}</span>
+                </li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
             {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
