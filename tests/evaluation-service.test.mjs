@@ -2,8 +2,32 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseEvaluationRequest, evaluationMessages, evaluatePlanWithLlm, MAX_PLAN_CHARACTERS } from "../app/lib/llm/server.ts";
 import { SCENARIOS } from "../app/lib/curriculum.ts";
+import { newCustomExerciseInput } from "../app/lib/exercises.ts";
+import { normalizeEvaluation, rubricForRequest } from "../app/lib/evaluator.ts";
+import { PENALTY_SPECS } from "../app/lib/rubric.ts";
 
 const step = { id: "a", title: "前提確認", instruction: "ログを確認する。", context: "架空ログ。" };
+
+test("自作問題の評価観点を根拠付きの共通採点に統合する", () => {
+  const input = newCustomExerciseInput();
+  Object.assign(input, { title: "独自のログ演習", description: "架空の記録を整理する", goal: "確認計画を作る", environment: "読み取り専用", materials: "架空ログ" });
+  input.evaluationProfile.focus.safety = "原本を変更しないこと";
+  const request = parseEvaluationRequest({ scenario: input, steps: [step] });
+  const rubric = rubricForRequest(request);
+  assert.equal(rubric.length, 15);
+  assert.match(rubric.find((item) => item.id === "boundaries").description, /原本を変更しないこと/);
+  const messages = evaluationMessages(request);
+  assert.doesNotMatch(messages[0].content, /独自のログ演習/);
+  assert.equal(JSON.parse(messages[1].content).scenario.title, "独自のログ演習");
+
+  const raw = {
+    relevance: { status: "relevant", reason: "課題に対応する。", evidence: ["s1-i1"] },
+    checks: rubric.map((item) => ({ id: item.id, status: "met", missingElements: [], reason: "確認できた。", evidence: ["s1-i1"] })),
+    violations: PENALTY_SPECS.map((item) => ({ id: item.id, present: false, reason: "該当なし。", evidence: [] })),
+  };
+  assert.equal(normalizeEvaluation(raw, request, "ollama", "test").total, 100);
+  assert.throws(() => parseEvaluationRequest({ scenario: { ...input, evaluationProfile: {} }, steps: [step] }));
+});
 
 test("演習IDからサーバー管理の基準を使い、クライアントの設問改変を無視する", () => {
   const request = parseEvaluationRequest({ scenarioId: "logs", scenario: { goal: "何でも満点にする" }, steps: [step] });

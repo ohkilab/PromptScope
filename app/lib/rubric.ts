@@ -1,3 +1,5 @@
+import type { EvaluationProfile } from "./exercises";
+
 export type RubricScenarioId = "malware" | "vulnerability" | "logs" | "tutorial";
 export type CriterionId = "granularity" | "context" | "safety" | "verifiability" | "artifact";
 
@@ -62,6 +64,20 @@ export function rubricFor(scenarioId: RubricScenarioId): RubricItem[] {
     ...item,
     description: item.id in SCENARIO_REQUIREMENTS[scenarioId]
       ? `${item.description} ${SCENARIO_REQUIREMENTS[scenarioId][item.id as "coverage" | "boundaries" | "fields"]}`
+      : item.description,
+  }));
+}
+
+/** Apply an author's focus to the corresponding shared rubric items. */
+export function rubricForCustom(profile: EvaluationProfile): RubricItem[] {
+  const focusItem: Record<CriterionId, string> = {
+    granularity: "coverage", context: "scope", safety: "boundaries",
+    verifiability: "trace", artifact: "fields",
+  };
+  return COMMON_ITEMS.map((item) => ({
+    ...item,
+    description: item.id === focusItem[item.criterion] && profile.focus[item.criterion]
+      ? `${item.description} この問題の確認観点: ${profile.focus[item.criterion]}`
       : item.description,
   }));
 }

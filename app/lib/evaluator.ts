@@ -1,7 +1,8 @@
 import {
   AXIS_MINIMUM, PASS_SCORE, PENALTY_SPECS, RUBRIC_VERSION, rubricFor,
-  type CriterionId, type RubricScenarioId,
+  rubricForCustom, type CriterionId, type RubricScenarioId,
 } from "./rubric.ts";
+import type { EvaluationProfile } from "./exercises.ts";
 
 export type AnalysisStep = { id: string; title: string; instruction: string; context: string };
 export type EvaluationCriterionId = CriterionId;
@@ -35,7 +36,17 @@ export type EvaluationResult = {
   model: string;
   rubricVersion: string;
 };
-export type EvaluationRequest = { scenarioId: RubricScenarioId; steps: AnalysisStep[] };
+export type EvaluationRequest = (
+  | { scenarioId: RubricScenarioId; scenario?: never }
+  | { scenarioId?: never; scenario: {
+      title: string; description: string; goal: string; environment: string;
+      materials: string; evaluationProfile: EvaluationProfile;
+    } }
+) & { steps: AnalysisStep[] };
+
+export function rubricForRequest(request: EvaluationRequest) {
+  return request.scenario ? rubricForCustom(request.scenario.evaluationProfile) : rubricFor(request.scenarioId!);
+}
 
 export const CRITERION_SPECS = [
   { id: "granularity", label: "分割粒度", max: 20 },
@@ -174,7 +185,7 @@ function duplicateTasks(steps: AnalysisStep[]): Evidence[] {
 export function emptyEvaluation(request: EvaluationRequest): EvaluationResult {
   return normalizeEvaluation({
     relevance: { status: "irrelevant", reason: "指示とコンテキストを入力してください。", evidence: [] },
-    checks: rubricFor(request.scenarioId).map((item) => ({ id: item.id, status: "missing", missingElements: [item.label], reason: item.description.slice(0, 240), evidence: [] })),
+    checks: rubricForRequest(request).map((item) => ({ id: item.id, status: "missing", missingElements: [item.label], reason: item.description.slice(0, 240), evidence: [] })),
     violations: PENALTY_SPECS.map((item) => ({ id: item.id, present: false, reason: "該当する記述なし。", evidence: [] })),
   }, request, "rules", "入力チェック");
 }
@@ -185,7 +196,7 @@ export function normalizeEvaluation(
 ): EvaluationResult {
   if (!isRecord(value) || !isRecord(value.relevance)) throw new Error("Invalid evaluation object.");
   const { steps } = request;
-  const rubric = rubricFor(request.scenarioId);
+  const rubric = rubricForRequest(request);
   const rawChecks = indexedItems(value.checks, rubric.map((item) => item.id), "checks");
   const rawViolations = indexedItems(value.violations, PENALTY_SPECS.map((item) => item.id), "violations");
   const relevance = value.relevance.status;

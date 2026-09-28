@@ -5,25 +5,21 @@ import type { FocusEvent } from "react";
 import * as Progress from "@radix-ui/react-progress";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { AnalysisStep, EvaluationResult } from "./lib/evaluator";
-import type { ScenarioId } from "./lib/curriculum";
+import type { Scenario, ScenarioId } from "./lib/curriculum";
 import { SCENARIOS } from "./lib/curriculum";
 import { TUTORIAL_ANSWER, TUTORIAL_INPUT, TUTORIAL_SCENARIO, TUTORIAL_STEPS } from "./lib/tutorial";
 import type { TutorialStepId } from "./lib/tutorial";
 import { CheckDetails, RubricGuide, ScoreBreakdown } from "./components/evaluation-details";
 import { TutorialCoach, Welcome } from "./components/tutorial";
+import { ExerciseEditor } from "./components/exercise-editor";
+import { EvaluationProfileDetails } from "./components/evaluation-profile";
+import { createCustomScenario, type CustomExerciseInput, type CustomScenario } from "./lib/exercises";
+import { loadCustomExercises, MAX_CUSTOM_EXERCISES, saveCustomExercises } from "./lib/exercise-storage";
 
 type PlanEvaluation = EvaluationResult;
 
-type ScenarioRecord = {
+type ScenarioRecord = Omit<Scenario, "id"> & {
   id: ScenarioId | "tutorial";
-  eyebrow: string;
-  title: string;
-  description: string;
-  goal: string;
-  environment: string;
-  riskLabel: string;
-  duration: string;
-  initialSteps: AnalysisStep[];
 };
 
 type DraftStep = {
@@ -36,6 +32,7 @@ type DraftStep = {
 type CompletionState = "idle" | "needs-work" | "complete";
 
 type ScenarioDraftState = {
+  revision: number;
   steps: DraftStep[];
   selectedStepId: string;
   scoredEvaluation: PlanEvaluation | null;
@@ -43,7 +40,6 @@ type ScenarioDraftState = {
   completionState: CompletionState;
 };
 
-const scenarioList = SCENARIOS;
 const EMPTY_STEPS: DraftStep[] = [];
 const EVALUATION_AXIS_COUNT = 5;
 
@@ -86,6 +82,7 @@ function planFingerprint(steps: DraftStep[]) {
 function createScenarioDraft(scenario: ScenarioRecord): ScenarioDraftState {
   const steps = scenarioInitialSteps(scenario);
   return {
+    revision: 0,
     steps,
     selectedStepId: steps[0]?.id ?? "",
     scoredEvaluation: null,
@@ -106,16 +103,14 @@ export default function Home() {
   const [tutorialDraft, setTutorialDraft] = useState(() => createScenarioDraft(TUTORIAL_SCENARIO));
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [evaluationError, setEvaluationError] = useState("");
+  const [customScenarios, setCustomScenarios] = useState<CustomScenario[]>([]);
+  const [editingScenario, setEditingScenario] = useState<CustomScenario | null | undefined>(undefined);
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageMessage, setStorageMessage] = useState("");
+  const scenarioList = [...SCENARIOS, ...customScenarios];
   const workspaceTitle = useRef<HTMLHeadingElement>(null);
   const isTutorial = view === "tutorial";
   const tutorialStep = TUTORIAL_STEPS[tutorialIndex].id;
-
-  useEffect(() => {
-    if (view === "exercise") {
-      workspaceTitle.current?.focus({ preventScroll: true });
-      window.scrollTo({ top: 0, behavior: "instant" });
-    }
-  }, [view]);
 
   function startTutorial() {
     setTutorialDraft(createScenarioDraft(TUTORIAL_SCENARIO));
@@ -171,6 +166,43 @@ export default function Home() {
   const [liveMessage, setLiveMessage] = useState(
     "回答を書き終えたら、計画を採点してください。",
   );
+
+  useEffect(() => {
+    if (view === "exercise" && editingScenario === undefined) {
+      workspaceTitle.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    }
+  }, [view, scenarioId, editingScenario]);
+
+  useEffect(() => {
+    try {
+      const saved = loadCustomExercises(window.localStorage);
+      // Browser data becomes available only after server hydration.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCustomScenarios(saved.scenarios);
+      setDraftsByScenario((current) => ({ ...current, ...Object.fromEntries(saved.scenarios.map((scenario) => {
+        const restored = createScenarioDraft(scenario);
+        restored.steps = saved.stepsByScenario[scenario.id];
+        restored.selectedStepId = restored.steps[0]?.id ?? "";
+        return [scenario.id, restored];
+      })) }));
+      setStorageReady(true);
+    } catch {
+      setStorageMessage("保存済みの問題を読み込めませんでした。このページでは自作問題を一時的に利用できますが、ブラウザーには保存できません。");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    try {
+      saveCustomExercises(window.localStorage, customScenarios, Object.fromEntries(customScenarios.map((scenario) => [scenario.id, draftsByScenario[scenario.id]?.steps ?? scenario.initialSteps])));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStorageMessage("");
+    } catch {
+      setStorageMessage("ブラウザーへの保存に失敗しました。自作問題と回答はこのページを開いている間だけ保持されます。");
+    }
+  }, [storageReady, customScenarios, draftsByScenario]);
+
   const activeDraft = activeScenario
     ? activeScenario.id === "tutorial" ? tutorialDraft : draftsByScenario[activeScenario.id] ?? createScenarioDraft(activeScenario)
     : null;
@@ -222,6 +254,7 @@ export default function Home() {
     }
     const activeId = activeScenario.id;
     setDraftsByScenario((current) => {
+      if (activeId.startsWith("custom-") && !current[activeId]) return current;
       const currentDraft = current[activeId] ?? createScenarioDraft(activeScenario);
       return {
         ...current,
@@ -238,6 +271,7 @@ export default function Home() {
     setEvaluationError("");
     updateActiveDraft((current) => ({
       ...current,
+      revision: current.revision + 1,
       steps: current.steps.map((step) =>
         step.id === stepId ? { ...step, [field]: value } : step,
       ),
@@ -253,7 +287,7 @@ export default function Home() {
     }));
   }
 
-  function switchScenario(nextScenario: (typeof SCENARIOS)[number]) {
+  function switchScenario(nextScenario: Scenario) {
     setEvaluationError("");
     setScenarioId(nextScenario.id);
     setDraftsByScenario((current) => {
@@ -266,7 +300,42 @@ export default function Home() {
     setLiveMessage("演習を切り替えました。前回の編集内容はこのセッション内に保持されます。");
   }
 
+  function saveExercise(input: CustomExerciseInput) {
+    if (!editingScenario && customScenarios.length >= MAX_CUSTOM_EXERCISES) {
+      throw new Error(`自作問題は${MAX_CUSTOM_EXERCISES}件まで保存できます。既存の問題を編集・削除してください。`);
+    }
+    const id = editingScenario?.id ?? `custom-${crypto.randomUUID()}`;
+    const scenario = createCustomScenario(input, id);
+    setCustomScenarios((current) => editingScenario ? current.map((item) => item.id === id ? scenario : item) : [...current, scenario]);
+    setDraftsByScenario((current) => ({ ...current, [id]: current[id] ? {
+      ...current[id], revision: current[id].revision + 1, scoredEvaluation: null, hasUnscoredChanges: true, completionState: "idle",
+    } : createScenarioDraft(scenario) }));
+    setScenarioId(id);
+    setEvaluationError("");
+    setEditingScenario(undefined);
+    setLiveMessage("問題を保存しました。目的と資料を読み、分析タスクを自分で組み立ててください。");
+  }
+
+  function deleteExercise() {
+    if (!editingScenario) return;
+    const id = editingScenario.id;
+    setCustomScenarios((current) => current.filter((scenario) => scenario.id !== id));
+    setDraftsByScenario((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    if (scenarioId === id) setScenarioId(firstScenario.id);
+    setEditingScenario(undefined);
+    setEvaluationError("");
+    setLiveMessage("自作問題と回答を削除しました。");
+  }
+
   function addStep() {
+    if (steps.length >= 20) {
+      setLiveMessage("分析タスクは20件までです。既存のタスクを整理してください。");
+      return;
+    }
     const nextId = `step-${crypto.randomUUID()}`;
     const nextStep: DraftStep = {
       id: nextId,
@@ -277,6 +346,7 @@ export default function Home() {
     setEvaluationError("");
     updateActiveDraft((current) => ({
       ...current,
+      revision: current.revision + 1,
       steps: [...current.steps, nextStep],
       selectedStepId: nextId,
       hasUnscoredChanges: true,
@@ -297,6 +367,7 @@ export default function Home() {
       const replacement = nextSteps[Math.min(removedIndex, nextSteps.length - 1)];
       return {
         ...current,
+        revision: current.revision + 1,
         steps: nextSteps,
         selectedStepId: stepId === selectedStepId ? replacement?.id ?? "" : current.selectedStepId,
         hasUnscoredChanges: true,
@@ -316,6 +387,7 @@ export default function Home() {
       [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
       return {
         ...current,
+        revision: current.revision + 1,
         steps: next,
         selectedStepId: stepId,
         hasUnscoredChanges: true,
@@ -328,6 +400,14 @@ export default function Home() {
     if (isEvaluating) return;
 
     const submittedFingerprint = planFingerprint(steps);
+    const submittedRevision = activeDraft?.revision ?? 0;
+    const initialFingerprint = planFingerprint(scenarioInitialSteps(activeScenario));
+    if (!isTutorial && submittedFingerprint === initialFingerprint) {
+      const message = "初期案のままでは採点できません。少なくとも1か所を自分の判断で編集してください。";
+      setEvaluationError(message);
+      setLiveMessage(message);
+      return;
+    }
 
     setIsEvaluating(true);
     setEvaluationError("");
@@ -338,7 +418,16 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          scenarioId: activeScenario.id,
+          ...(activeScenario.id.startsWith("custom-") ? {
+            scenario: {
+              title: activeScenario.title,
+              description: activeScenario.description,
+              goal: activeScenario.goal,
+              environment: activeScenario.environment,
+              materials: activeScenario.materials,
+              evaluationProfile: activeScenario.evaluationProfile,
+            },
+          } : { scenarioId: activeScenario.id }),
           steps: toAnalysisSteps(steps),
         }),
       });
@@ -354,7 +443,8 @@ export default function Home() {
       updateActiveDraft((current) => ({
         ...current,
         scoredEvaluation: payload,
-        hasUnscoredChanges: planFingerprint(current.steps) !== submittedFingerprint,
+        hasUnscoredChanges: current.revision !== submittedRevision || planFingerprint(current.steps) !== submittedFingerprint,
+        completionState: "idle",
       }));
       setLiveMessage(
         `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "必須項目と各軸の不足を確認してください。"}`,
@@ -464,6 +554,12 @@ export default function Home() {
             })}
           </nav>}
 
+          {!isTutorial && <div className="custom-exercise-actions">
+            <button className="button button-secondary" type="button" onClick={() => setEditingScenario(null)} disabled={customScenarios.length >= MAX_CUSTOM_EXERCISES}>＋ 自分の問題を作る</button>
+            <p>自作問題と回答はこのブラウザーに保存します（最大{MAX_CUSTOM_EXERCISES}件）。</p>
+          </div>}
+          {!isTutorial && storageMessage && <p className="storage-message" role="alert">{storageMessage}</p>}
+
           <section className="focus-note" aria-labelledby="focus-heading">
             <div className="focus-heading-row">
               <p className="mono-label">学習の要点</p>
@@ -478,7 +574,7 @@ export default function Home() {
 
           <div className="left-footer">
             <span className="safety-stamp">実処理なし</span>
-            <p>教育用プロトタイプ<br />実処理は行いません・採点時のみLLMと通信</p>
+            <p>教育用プロトタイプ<br />実処理は行いません・採点と評価観点の提案時にLLMと通信</p>
           </div>
         </aside>
 
@@ -490,7 +586,7 @@ export default function Home() {
                 <p className="mono-label accent-label">{activeScenario.eyebrow}</p>
                 <h1 id="workspace-title" ref={workspaceTitle} tabIndex={-1}>{activeScenario.title}</h1>
               </div>
-              <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>
+              {activeScenario.id.startsWith("custom-") ? <button className="button button-complete" type="button" onClick={() => setEditingScenario(customScenarios.find(({ id }) => id === activeScenario.id))}>問題・評価観点を編集</button> : <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>}
             </div>
             <p className="overview-description">{activeScenario.description}</p>
             <div className="overview-meta" aria-label="演習の概要">
@@ -507,6 +603,8 @@ export default function Home() {
                 <strong><span>{activeScenario.riskLabel}</span><span className="meta-separator">·</span>{activeScenario.duration}</strong>
               </div>
             </div>
+            {activeScenario.materials && <details className="exercise-materials" open><summary>入力データ・配布資料</summary><pre>{activeScenario.materials}</pre></details>}
+            {activeScenario.evaluationProfile && <EvaluationProfileDetails profile={activeScenario.evaluationProfile} />}
             {isTutorial && <div className="tutorial-input">
               <table><caption>入力データ / 昨日と今日のファイル一覧</caption><thead><tr><th scope="col">ファイル名</th><th scope="col">昨日（バイト）</th><th scope="col">今日（バイト）</th></tr></thead><tbody>
                 {TUTORIAL_INPUT.map((row) => <tr key={row.file}><th scope="row">{row.file}</th><td>{row.before}</td><td>{row.after}</td></tr>)}
@@ -555,7 +653,7 @@ export default function Home() {
               <div className="empty-tasks">
                 <p className="mono-label">タスクはまだありません</p>
                 <p>最初の分析タスクを追加して計画を始めましょう。</p>
-                <button className="button button-secondary" type="button" onClick={addStep}>＋ タスクを追加</button>
+                <button className="button button-secondary" type="button" onClick={addStep} disabled={steps.length >= 20}>＋ タスクを追加</button>
               </div>
             ) : (
               steps.map((step, index) => {
@@ -627,6 +725,7 @@ export default function Home() {
                         <label htmlFor={`task-title-${step.id}`}>タスクタイトル</label>
                         <input
                           id={`task-title-${step.id}`}
+                          maxLength={240}
                           value={step.title}
                           onFocus={() => selectStep(step.id)}
                           onChange={(event) => updateStep(step.id, "title", event.target.value)}
@@ -641,6 +740,7 @@ export default function Home() {
                           </label>
                           <textarea
                             id={`task-instruction-${step.id}`}
+                            maxLength={4_000}
                             value={step.instruction}
                             onFocus={() => selectStep(step.id)}
                             onChange={(event) => updateStep(step.id, "instruction", event.target.value)}
@@ -656,6 +756,7 @@ export default function Home() {
                           </label>
                           <textarea
                             id={`task-context-${step.id}`}
+                            maxLength={4_000}
                             value={step.context}
                             onFocus={() => selectStep(step.id)}
                             onChange={(event) => updateStep(step.id, "context", event.target.value)}
@@ -674,7 +775,7 @@ export default function Home() {
           </Tooltip.Provider>
 
           {guide("organize")}
-          <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep}>
+          <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep} disabled={steps.length >= 20}>
             <span className="add-symbol" aria-hidden="true">＋</span>
             <span><strong>分析タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
           </button>
@@ -721,7 +822,7 @@ export default function Home() {
           </div>
 
           {scoredEvaluation && <ScoreBreakdown result={scoredEvaluation} steps={steps} />}
-          <RubricGuide scenarioId={activeScenario.id} />
+          <RubricGuide scenario={activeScenario} />
 
           <div className="criteria-block">
             <div className="subsection-heading">
@@ -816,6 +917,7 @@ export default function Home() {
         <span>PromptScope / ANALYSIS INSTRUCTION TRAINER</span>
         <span>v0.2 · LLM-ASSISTED EDUCATIONAL PROTOTYPE</span>
       </footer>
+      {!isTutorial && editingScenario !== undefined && <ExerciseEditor key={editingScenario?.id ?? "new"} scenario={editingScenario} onSave={saveExercise} onDelete={deleteExercise} onClose={() => setEditingScenario(undefined)} />}
     </main>
   );
 }

@@ -24,7 +24,7 @@ export function Welcome({ onTutorial, onExercise }: { onTutorial: () => void; on
           <button className="button button-score" type="button" onClick={onTutorial}>例題で使い方を学ぶ <span aria-hidden="true">→</span></button>
         </div>
         <button className="button button-complete welcome-skip" type="button" onClick={onExercise}>使い方をスキップして演習を始める <span aria-hidden="true">↗</span></button>
-        <p className="welcome-footnote">教育用の練習ツールです．採点時に入力を設定済みのLLMへ送信しますが，実処理やAIの実行は行いません．<br />回答はこのページを開いている間だけ保持されます．</p>
+        <p className="welcome-footnote">教育用の練習ツールです．採点と評価観点の提案時に入力を設定済みのLLMへ送信します．実処理は行いません．<br />標準演習の回答はこのページ内で保持されます．自作問題とその回答はブラウザーに保存できます．</p>
       </section>
     </main>
   );

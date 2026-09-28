@@ -1,7 +1,8 @@
 import * as Accordion from "@radix-ui/react-accordion";
 import type { AnalysisStep, EvaluationCheck, EvaluationResult, Evidence } from "../lib/evaluator";
 import { CRITERION_SPECS } from "../lib/evaluator";
-import { PENALTY_SPECS, SCORING_GUIDE, STATUS_LABELS, rubricFor, type RubricScenarioId } from "../lib/rubric";
+import { PENALTY_SPECS, SCORING_GUIDE, STATUS_LABELS, rubricFor, rubricForCustom, type RubricScenarioId } from "../lib/rubric";
+import type { Scenario } from "../lib/curriculum";
 
 function EvidenceList({ evidence, steps }: { evidence: Evidence[]; steps: AnalysisStep[] }) {
   if (!evidence.length) return null;
@@ -14,8 +15,10 @@ function EvidenceList({ evidence, steps }: { evidence: Evidence[]; steps: Analys
   })}</ul>;
 }
 
-export function RubricGuide({ scenarioId }: { scenarioId: RubricScenarioId }) {
-  const rubric = rubricFor(scenarioId);
+export function RubricGuide({ scenario }: { scenario: Scenario | { id: "tutorial" } }) {
+  const rubric = "evaluationProfile" in scenario && scenario.evaluationProfile
+    ? rubricForCustom(scenario.evaluationProfile)
+    : rubricFor(scenario.id as RubricScenarioId);
   return <details className="rubric-guide">
     <summary>加点・減点・合格条件を見る</summary>
     <p>{SCORING_GUIDE}</p>
