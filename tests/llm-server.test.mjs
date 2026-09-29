@@ -7,6 +7,7 @@ const {
   evaluatePlanWithLlm,
   parseEvaluationRequest,
 } = await tsImport("../app/lib/llm/server.ts", import.meta.url);
+import { answerFromSchema, ollamaResponse, withFetch, withOllamaEnvironment } from "./support/llm.mjs";
 
 const request = {
   scenario: {
@@ -31,57 +32,6 @@ const request = {
     },
   ],
 };
-
-/** Answers any evaluation call with every item met, using the grounded enums in the schema. */
-function answerFromSchema(schema) {
-  const [grounded] = schema.properties.results.items.anyOf;
-  const evidence = grounded.properties.evidence.enum[0];
-  const body = {
-    results: grounded.properties.key.enum.map((key) => ({ key, status: "met", evidence, reason: "" })),
-  };
-  if (schema.properties.taskRoles) {
-    const phases = schema.properties.taskRoles.items.properties.phase.enum;
-    body.taskRoles = schema.properties.taskRoles.items.properties.stepId.enum
-      .map((stepId, index) => ({ stepId, phase: phases[index], redundant: false }));
-    body.unsafe = [];
-    body.strengths = ["範囲を明示している"];
-  }
-  return body;
-}
-
-function ollamaResponse(content) {
-  return new Response(JSON.stringify({ response: content }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-async function withOllamaEnvironment(settings, callback) {
-  const values = { LLM_PROVIDER: "ollama", OLLAMA_BASE_URL: "http://127.0.0.1:11434", OLLAMA_MODEL: "test-model", OLLAMA_NUM_CTX: "8192", EVALUATION_CONCURRENCY: undefined, ...settings };
-  const previous = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
-  for (const [name, value] of Object.entries(values)) {
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = String(value);
-  }
-  try {
-    return await callback();
-  } finally {
-    for (const [name, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
-}
-
-async function withFetch(handler, callback) {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = handler;
-  try {
-    return await callback();
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-}
 
 test("タスクごとの判定と計画全体の判定を別々の呼び出しで送り、合算する", async () => {
   const bodies = [];

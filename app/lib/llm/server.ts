@@ -337,9 +337,20 @@ function parseJsonContent(content: unknown): unknown {
   }
 }
 
+function requestTimeoutMs(): number {
+  const configured = optionalIntegerSetting("LLM_REQUEST_TIMEOUT_MS");
+  return configured !== undefined && configured > 0 ? configured : REQUEST_TIMEOUT_MS;
+}
+
+/**
+ * アプリのサーバーとLLMのサーバー（Ollama・OpenRouter）は別に動くため、接続できない場合は
+ * 応答の不備（502・再試行あり）と区別して503で返し、接続先を示して設定を確認できるようにする。
+ */
 async function fetchBodyWithTimeout(url: string, init: RequestInit, signal?: AbortSignal): Promise<UnknownRecord> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs = requestTimeoutMs();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const origin = new URL(url).origin;
   try {
     const response = await fetch(url, {
       ...init,
@@ -351,10 +362,18 @@ async function fetchBodyWithTimeout(url: string, init: RequestInit, signal?: Abo
       throw new EvaluationServiceError(499, "操作がキャンセルされました。", { cause: error });
     }
     if (error instanceof EvaluationServiceError) throw error;
-    const message = error instanceof Error && error.name === "AbortError"
-      ? "LLMの応答がタイムアウトしました。"
-      : "LLMへ接続できませんでした。設定と起動状態を確認してください。";
-    throw new EvaluationServiceError(502, message, { cause: error });
+    if (controller.signal.aborted) {
+      throw new EvaluationServiceError(
+        504,
+        `LLMの応答が${Math.round(timeoutMs / 1000)}秒以内に返りませんでした（${origin}）。`,
+        { cause: error },
+      );
+    }
+    throw new EvaluationServiceError(
+      503,
+      `LLMへ接続できませんでした（${origin}）。LLMサーバーの起動状態と、SSHトンネルなど接続先の設定を確認してください。`,
+      { cause: error },
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -508,11 +527,25 @@ function errorDetail(error: unknown): string {
 }
 
 function failureReason(error: unknown): string {
-  if (error instanceof EvaluationServiceError) return "provider_response_error";
+  if (error instanceof EvaluationServiceError) {
+    if (error.status === 503) return "connection_error";
+    if (error.status === 504) return "timeout";
+    return "provider_response_error";
+  }
   const message = error instanceof Error ? error.message : "";
   if (/stepId/.test(message)) return "invalid_step_id";
   if (/evidence/.test(message)) return "invalid_evidence";
   return "invalid_evaluation_schema";
+}
+
+function logRejectedCall(config: ProviderConfig, label: string, error: unknown): void {
+  console.error("LLM evaluation rejected", {
+    provider: config.provider,
+    model: config.model,
+    call: label,
+    reason: failureReason(error),
+    detail: errorDetail(error),
+  });
 }
 
 /** One LLM call validated by `validate`; a validation failure is retried once with the error attached. */
@@ -533,7 +566,11 @@ async function evaluationCall<T>(
       return validate(raw);
     } catch (error) {
       lastError = error;
-      if (signal.aborted || (error instanceof EvaluationServiceError && error.status !== 502)) throw error;
+      if (signal.aborted) throw error;
+      if (error instanceof EvaluationServiceError && error.status !== 502) {
+        logRejectedCall(config, label, error);
+        throw error;
+      }
       if (attempt === 0) {
         const cause = error instanceof EvaluationServiceError ? error.cause : error;
         const detail = cause instanceof Error ? cause.message.slice(0, 600) : "構造化出力が不正です。";
@@ -544,13 +581,7 @@ async function evaluationCall<T>(
       }
     }
   }
-  console.error("LLM evaluation rejected", {
-    provider: config.provider,
-    model: config.model,
-    call: label,
-    reason: failureReason(lastError),
-    detail: errorDetail(lastError),
-  });
+  logRejectedCall(config, label, lastError);
   if (lastError instanceof EvaluationServiceError) throw lastError;
   throw new EvaluationServiceError(
     502,

@@ -213,6 +213,16 @@ npm run lint
 `npm run dev` でローカル開発サーバーを起動します。`npm test` はビルドと
 サーバー描画の検証、`npm run lint` は静的チェックを実行します。
 
+実際に動いているサーバーを使う確認は、LLMのサーバー（SSHトンネルなど）を起動してから実行します。
+`.env`・`.env.local`の設定を読み込みます。
+
+- `npm run test:live` — LLMのサーバーへの接続、モデルの有無、`/api/generate`がJSON Schemaを守るかを確認します。
+  `APP_BASE_URL=http://localhost:3000`を付けると、起動中のアプリのサーバー経由の採点も確認します。
+- `npm run test:samples` — `tests/fixtures/score-samples.mjs`の分野別サンプル（目標20・50・80・100点）が
+  目標点±8点に収まるかを確認します（10分ほどかかります）。モデル・評価プロンプト・ルーブリックを変えたときに使います。
+- `npm run score:samples [サンプルIDの一部]` — サンプルを採点して目標点との差を表示します。
+  `SAMPLE_VERBOSE=1`で項目ごとの失点も表示します。
+
 ## 主要ファイル
 
 - `app/page.tsx` — 3ペインのワークスペース、タスク編集、採点・完了操作
