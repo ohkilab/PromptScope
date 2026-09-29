@@ -12,19 +12,19 @@ export function Welcome({ onTutorial, onExercise }: { onTutorial: () => void; on
       </header>
       <section className="welcome-content" aria-labelledby="welcome-title">
         <p className="mono-label accent-label">はじめての方へ</p>
-        <h1 id="welcome-title">安全な分析は，<br />よい分解から．</h1>
-        <p className="welcome-lead">AI に何を，どこまで任せるか．<br />分析の仕事を分けて，伝わる指示を練習しましょう．</p>
+        <h1 id="welcome-title">安全な分析は、<br />よい分解から。</h1>
+        <p className="welcome-lead">AI に何を、どこまで任せるか。<br />分析の仕事を分けて、伝わる指示を練習しましょう。</p>
         <ol className="welcome-flow">
-          <li><span className="mono-label">手順 1</span><h2>目的を読む</h2><p>何を調べるのか，使える材料と制約を確認します．</p></li>
-          <li><span className="mono-label">手順 2</span><h2>仕事を分けて書く</h2><p>AI に任せるタスクと，指示・前提を組み立てます．</p></li>
-          <li><span className="mono-label">手順 3</span><h2>採点して改善する</h2><p>5つの評価軸と改善提案を読み，計画を磨きます．</p></li>
+          <li><span className="mono-label">手順 1</span><h2>目的を読む</h2><p>何を調べるのか、使える材料と制約を確認します。</p></li>
+          <li><span className="mono-label">手順 2</span><h2>仕事を分けて書く</h2><p>AI に任せるタスクと、指示・前提を組み立てます。</p></li>
+          <li><span className="mono-label">手順 3</span><h2>採点して改善する</h2><p>5つの評価軸と改善提案を読み、計画を磨きます。</p></li>
         </ol>
         <div className="welcome-start">
-          <div><span className="mono-label accent-label">例題ガイド・約3分</span><h2>まずは小さな例題から</h2><p>架空のファイル一覧を使い，吹き出しの案内に沿って入力と採点を体験できます．</p></div>
+          <div><span className="mono-label accent-label">例題ガイド・約3分</span><h2>まずは小さな例題から</h2><p>架空のファイル一覧を使い、吹き出しの案内に沿って入力と採点を体験できます。</p></div>
           <button className="button button-score" type="button" onClick={onTutorial}>例題で使い方を学ぶ <span aria-hidden="true">→</span></button>
         </div>
         <button className="button button-complete welcome-skip" type="button" onClick={onExercise}>使い方をスキップして演習を始める <span aria-hidden="true">↗</span></button>
-        <p className="welcome-footnote">教育用の練習ツールです．採点と評価観点の提案時に入力を設定済みのLLMへ送信します．実処理は行いません．<br />標準演習の回答はこのページ内で保持されます．自作問題とその回答はブラウザーに保存できます．</p>
+        <p className="welcome-footnote">教育用の練習ツールです。採点と評価観点の提案時に入力を設定済みのLLMへ送信します。実処理は行いません。<br />標準演習の回答はこのページ内で保持されます。自作問題とその回答はブラウザーに保存できます。</p>
       </section>
     </main>
   );

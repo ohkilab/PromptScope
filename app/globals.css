@@ -96,7 +96,6 @@ button:disabled {
 }
 
 .brand-lockup,
-.topbar-meta,
 .overview-heading,
 .section-heading,
 .task-list-heading,
@@ -140,26 +139,6 @@ button:disabled {
   color: var(--ink-muted);
   font-size: 12px;
   letter-spacing: 0.025em;
-}
-
-.topbar-meta {
-  justify-content: flex-end;
-  gap: 10px;
-  color: var(--ink-muted);
-  font-size: 12px;
-}
-
-.local-indicator {
-  width: 7px;
-  height: 7px;
-  display: inline-block;
-  border-radius: 50%;
-  background: var(--lime-dark);
-  box-shadow: 0 0 0 3px var(--lime-soft);
-}
-
-.slash {
-  color: var(--line-strong);
 }
 
 .mono-label {
@@ -357,7 +336,7 @@ button:disabled {
 }
 
 .left-footer p {
-  margin: 10px 0 0;
+  margin: 0;
 }
 
 .safety-stamp {
@@ -539,18 +518,17 @@ button:disabled {
 }
 
 .task-list-heading {
-  align-items: flex-end;
-  gap: 20px;
+  display: block;
   padding: 28px 0 15px;
 }
 
 .helper-copy {
-  max-width: 275px;
-  margin: 0;
+  margin: 6px 0 0;
   color: var(--ink-muted);
   font-size: 11px;
   line-height: 1.5;
-  text-align: right;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .task-list {
@@ -1569,10 +1547,6 @@ button:disabled {
     font-size: 10px;
   }
 
-  .topbar-meta {
-    display: none;
-  }
-
   .workspace-grid {
     margin-top: 18px;
   }
@@ -1660,6 +1634,7 @@ button:disabled {
   .helper-copy {
     margin-top: 9px;
     text-align: left;
+    white-space: normal;
   }
 
   .task-card-body {
@@ -2126,21 +2101,9 @@ body {
 }
 
 .brand-tagline,
-.topbar-meta,
 .topbar > .mono-label {
   color: #c4ced4;
   font-size: 11px;
-}
-
-.topbar-meta .mono-label {
-  color: #c4ced4;
-}
-
-.local-indicator {
-  width: 6px;
-  height: 6px;
-  background: #70bc86;
-  box-shadow: none;
 }
 
 .mono-label {
@@ -2226,6 +2189,11 @@ body {
   font-weight: 700;
   letter-spacing: -0.025em;
   line-height: 1.35;
+}
+
+.column-intro h2,
+.score-panel-header h2 {
+  margin-top: 0;
 }
 
 .column-description {
@@ -2349,7 +2317,7 @@ body {
 }
 
 .overview-heading h1 {
-  margin-top: 6px;
+  margin-top: 0;
   font-family: var(--sans);
   font-size: clamp(23px, 2.4vw, 32px);
   font-weight: 700;
@@ -2431,6 +2399,14 @@ body {
   margin: 0;
   padding: 5px 17px 9px;
   overflow: visible;
+}
+
+.progress-add-task {
+  padding: 0 17px 13px;
+}
+
+.progress-add-task .add-task-button {
+  margin-top: 0;
 }
 
 .progress-rail li {

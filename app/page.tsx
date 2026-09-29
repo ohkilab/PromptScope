@@ -117,12 +117,12 @@ export default function Home() {
     setTutorialDraft(createScenarioDraft(TUTORIAL_SCENARIO));
     setTutorialIndex(0);
     setView("tutorial");
-    setLiveMessage("専用の例題で使い方を練習します．演習の回答は保持されています．");
+    setLiveMessage("専用の例題で使い方を練習します。演習の回答は保持されています。");
   }
 
   function openExercise() {
     setView("exercise");
-    setLiveMessage("演習の回答を編集できます．使い方はいつでも開き直せます．");
+    setLiveMessage("演習の回答を編集できます。使い方はいつでも開き直せます。");
   }
 
   function guide(id: TutorialStepId) {
@@ -135,11 +135,11 @@ export default function Home() {
       nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges || isEvaluating)}
       onSkip={id === "score" ? () => {
         setTutorialIndex((current) => current + 1);
-        setLiveMessage("LLM採点をスキップしました．採点環境が準備できたら，通常の演習で試せます．");
+        setLiveMessage("LLM採点をスキップしました。採点環境が準備できたら、通常の演習で試せます。");
       } : undefined}
       onExample={id === "instruction" || id === "context" ? () => {
         if (steps[0]) updateStep(steps[0].id, id, TUTORIAL_ANSWER[id]);
-        setLiveMessage("回答例を入力しました．内容を確認し，自由に書き換えてみましょう．");
+        setLiveMessage("回答例を入力しました。内容を確認し、自由に書き換えてみましょう。");
       } : undefined}
     />;
   }
@@ -244,12 +244,6 @@ export default function Home() {
   const summaryTone = displayedScore === null
     ? "unscored"
     : scoreTone(displayedPassed ? displayedScore : Math.min(displayedScore, 79));
-  const evaluationSource = scoredEvaluation?.provider === "openrouter"
-    ? "OPENROUTER"
-    : scoredEvaluation?.provider === "ollama"
-      ? "OLLAMA"
-      : "LLM";
-
   function updateActiveDraft(
     update: (current: ScenarioDraftState) => ScenarioDraftState,
   ) {
@@ -515,12 +509,6 @@ export default function Home() {
           <span className="brand-name">PromptScope</span>
           <span className="brand-tagline">安全な分析は、よい分解から。</span>
         </div>
-        <div className="topbar-meta">
-          <span className="local-indicator" aria-hidden="true" />
-          <span>学習モード</span>
-          <span className="slash" aria-hidden="true">/</span>
-          <span className="mono-label">LLMによる採点支援</span>
-        </div>
       </header>
 
       <div className="learning-toolbar">
@@ -528,7 +516,7 @@ export default function Home() {
           <div><span className="mono-label accent-label">例題ガイド</span><strong>専用の例題で練習中</strong><span>{tutorialIndex + 1} / {TUTORIAL_STEPS.length}</span></div>
           <button className="button button-complete" type="button" onClick={openExercise}>ガイドを終了して演習へ</button>
         </> : <>
-          <span>目的を読み，タスクと指示を組み立てましょう．</span>
+          <span>目的を読み、タスクと指示を組み立てましょう。</span>
           <button className="button button-complete" type="button" onClick={startTutorial}>使い方・例題を見る</button>
         </>}
       </div>
@@ -536,9 +524,8 @@ export default function Home() {
       <div className="workspace-grid">
         <aside className="left-column" aria-label="演習選択と学習の焦点">
           <div className="column-intro">
-            <p className="mono-label">演習</p>
             <h2>{isTutorial ? "使い方を学ぶ" : "演習を選ぶ"}</h2>
-            <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません．途中でもガイドを終了できます．" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
+            <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません。途中でもガイドを終了できます。" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
           </div>
 
           {isTutorial ? <ol className="tutorial-outline" aria-label="使い方ガイドの流れ">
@@ -583,7 +570,6 @@ export default function Home() {
           </section>
 
           <div className="left-footer">
-            <span className="safety-stamp">実処理なし</span>
             <p>教育用プロトタイプ<br />実処理は行いません・採点と評価観点の提案時にLLMと通信</p>
           </div>
         </aside>
@@ -593,10 +579,9 @@ export default function Home() {
             {guide("overview")}
             <div className="overview-heading">
               <div>
-                <p className="mono-label accent-label">{activeScenario.eyebrow}</p>
                 <h1 id="workspace-title" ref={workspaceTitle} tabIndex={-1}>{activeScenario.title}</h1>
               </div>
-              {activeScenario.id.startsWith("custom-") ? <button className="button button-complete" type="button" onClick={() => setEditingScenario(customScenarios.find(({ id }) => id === activeScenario.id))}>問題・評価観点を編集</button> : <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>}
+              {activeScenario.id.startsWith("custom-") && <button className="button button-complete" type="button" onClick={() => setEditingScenario(customScenarios.find(({ id }) => id === activeScenario.id))}>問題・評価観点を編集</button>}
             </div>
             <p className="overview-description">{activeScenario.description}</p>
             <div className="overview-meta" aria-label="演習の概要">
@@ -619,7 +604,7 @@ export default function Home() {
               <table><caption>入力データ / 昨日と今日のファイル一覧</caption><thead><tr><th scope="col">ファイル名</th><th scope="col">昨日（バイト）</th><th scope="col">今日（バイト）</th></tr></thead><tbody>
                 {TUTORIAL_INPUT.map((row) => <tr key={row.file}><th scope="row">{row.file}</th><td>{row.before}</td><td>{row.after}</td></tr>)}
               </tbody></table>
-              <p>この一覧をどう確認・比較・報告するかを，AI への指示として書きます．</p>
+              <p>この一覧をどう確認・比較・報告するかを、AI への指示として書きます。</p>
             </div>}
           </div>
 
@@ -627,8 +612,7 @@ export default function Home() {
             {guide("decompose")}
             <div className="section-heading">
               <div>
-                <p className="mono-label">タスクの分解</p>
-                <h2>分解の進捗</h2>
+                <h2>分解タスク一覧</h2>
               </div>
               <span className="progress-count">{steps.length}件のタスク</span>
             </div>
@@ -647,14 +631,19 @@ export default function Home() {
                 </li>
               ))}
             </ol>
+            <div className="progress-add-task">
+              <button className="add-task-button" type="button" onClick={addStep} disabled={steps.length >= 20}>
+                <span className="add-symbol" aria-hidden="true">＋</span>
+                <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+              </button>
+            </div>
           </div>
 
           <div className="task-list-heading">
             <div>
-              <p className="mono-label">タスク計画</p>
-              <h2>分析タスク</h2>
+              <h2>タスクへの指示</h2>
+              <p className="helper-copy">タスクの実施内容・LLMの情報取り扱いを記述しましょう。</p>
             </div>
-            <p className="helper-copy">安全な順序と、Agentに渡す境界を設計します。</p>
           </div>
 
           <Tooltip.Provider delayDuration={450} skipDelayDuration={200}>
@@ -787,20 +776,18 @@ export default function Home() {
           {guide("organize")}
           <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep} disabled={steps.length >= 20}>
             <span className="add-symbol" aria-hidden="true">＋</span>
-            <span><strong>分析タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+            <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
           </button>
 
-          <p className="keyboard-note"><span aria-hidden="true">⌘</span> フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
+          <p className="keyboard-note">フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
         </section>
 
         <aside className={`right-column${scoredEvaluation ? " is-scored" : ""}${target("feedback")}`} aria-label="計画の評価">
           {guide("feedback")}
           <div className="score-panel-header">
             <div>
-              <p className="mono-label">振り返り</p>
               <h2>計画の評価</h2>
             </div>
-            <span className="live-badge">{evaluationSource}</span>
           </div>
 
           <div className={`score-summary score-${summaryTone}`} aria-live="polite" aria-atomic="true">
