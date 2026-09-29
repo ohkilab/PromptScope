@@ -13,31 +13,52 @@ const request = {
     title: "テスト演習",
     description: "ローカルの入力を確認する",
     goal: "確認結果を報告書にまとめる",
-    environment: "読み取り専用環境",
+    environment: "隔離環境で読み取り専用の一般ユーザー権限だけを使用し，管理者権限と権限昇格は禁止する．対象はローカルデータだけとし，外部通信は禁止する．異常を検知した場合は作業を中止し，スナップショットから復元する．",
   },
   steps: [{
     id: "report",
     title: "結果を報告する",
-    instruction: "確認結果を報告書にまとめる",
-    context: "入力はローカルデータだけとする",
+    instruction: "確認結果、判断根拠、成功条件を報告書に記録し、同じ根拠で再確認し、証跡不足時は判断を保留する",
+    context: "入力はローカルデータだけとする．秘密情報はマスキングし，保存は検証環境内だけに限定して外部へ共有・送信しない",
   }],
 };
 
 const validEvaluation = {
-  criteria: ["granularity", "context", "verifiability"].map((id) => ({
-    id,
-    score: 20,
-    message: `${id}を確認した`,
-  })),
+  planEvaluation: {
+    granularity: {
+      taskCoverage: { score: 5, message: "必要な工程がある" },
+      order: { score: 5, message: "順序が妥当である" },
+    },
+    verifiability: {
+      decisionCriteria: { score: 5, message: "判定条件がある" },
+      evidence: { score: 5, message: "根拠を記録する" },
+      reproducibility: { score: 5, message: "再確認できる" },
+      uncertaintyHandling: { score: 5, message: "判断を保留できる" },
+    },
+  },
   stepEvaluations: [{
     stepId: "report",
     stepNumber: 1,
     title: "結果を報告する",
-    granularity: { score: 20, message: "具体的である" },
-    context: { score: 20, message: "必要な情報がある" },
+    granularity: {
+      singlePurpose: { score: 5, message: "主要作業が1つである" },
+      size: { score: 5, message: "委任できる大きさである" },
+    },
+    context: {
+      target: { score: 5, message: "対象が明確である" },
+      inputMaterial: { score: 5, message: "入力資料が明確である" },
+      constraints: { score: 5, message: "制約が明確である" },
+      priorResult: { score: 5, message: "前段結果が不要である" },
+    },
     obviousTypos: [],
   }],
   safetyAssessment: {
+    controls: {
+      permission: { status: "satisfied", evidence: request.scenario.environment, reason: "権限を限定する" },
+      secrets: { status: "satisfied", evidence: request.steps[0].context, reason: "情報を保護する" },
+      scope: { status: "satisfied", evidence: request.scenario.environment, reason: "対象を限定する" },
+      environmentImpact: { status: "satisfied", evidence: request.scenario.environment, reason: "停止と復旧を定める" },
+    },
     violations: [],
   },
   artifactAssessment: {
@@ -94,11 +115,11 @@ test("Ollamaの不正JSONを1回だけ再試行する", async () => {
   };
 
   try {
-    const result = await withOllamaEnvironment(32_768, () => evaluatePlanWithLlm(request));
+    const result = await withOllamaEnvironment(8_192, () => evaluatePlanWithLlm(request));
     assert.equal(calls, 2);
-    assert.equal(requestBody.think, true);
-    assert.equal(requestBody.options.num_ctx, 32_768);
-    assert.equal(requestBody.options.num_predict, 12_000);
+    assert.equal(requestBody.think, false);
+    assert.equal(requestBody.options.num_ctx, 8_192);
+    assert.equal(requestBody.options.num_predict, 4_096);
     assert.equal(result.total, 100);
     assert.equal(result.passed, true);
   } finally {
@@ -106,7 +127,7 @@ test("Ollamaの不正JSONを1回だけ再試行する", async () => {
   }
 });
 
-test("大きさの制限を超えるOllama設定と採点要求を送信前に拒否する", async () => {
+test("8192未満のOllama設定と大きさの制限を超える採点要求を送信前に拒否する", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = async () => {
@@ -116,10 +137,10 @@ test("大きさの制限を超えるOllama設定と採点要求を送信前に�
 
   try {
     await assert.rejects(
-      withOllamaEnvironment(8_192, () => evaluatePlanWithLlm(request)),
+      withOllamaEnvironment(4_096, () => evaluatePlanWithLlm(request)),
       (error) => error instanceof EvaluationServiceError
         && error.status === 503
-        && /32768以上/.test(error.publicMessage),
+        && /8192以上/.test(error.publicMessage),
     );
     assert.equal(calls, 0);
   } finally {

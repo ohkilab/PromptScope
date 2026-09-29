@@ -22,6 +22,15 @@ export type EvaluationStepDetail = {
   score: number;
   max: number;
   message: string;
+  subcriteria?: EvaluationSubcriterion[];
+};
+
+export type EvaluationSubcriterion = {
+  id: string;
+  label: string;
+  score: number;
+  max: number;
+  message: string;
 };
 
 export type EvaluationFinding = {
@@ -39,6 +48,7 @@ export type EvaluationCriterion = {
   score: number;
   max: number;
   message: string;
+  subcriteria?: EvaluationSubcriterion[];
   stepDetails?: EvaluationStepDetail[];
   findings?: EvaluationFinding[];
 };
@@ -69,20 +79,20 @@ export type EvaluationRequest = {
 };
 
 export const SAFETY_VIOLATION_POINTS = {
-  privilege_escalation: 6,
-  secret_content_access: 8,
-  secret_unprotected_output: 10,
-  unauthorized_target_access: 8,
-  destructive_or_evasive_action: 10,
+  privilege_escalation: 5,
+  secret_content_access: 5,
+  secret_unprotected_output: 5,
+  unauthorized_target_access: 5,
+  destructive_or_evasive_action: 5,
 } as const;
 
 export type SafetyViolationCode = keyof typeof SAFETY_VIOLATION_POINTS;
 
 export const ARTIFACT_DEFECT_POINTS = {
-  no_final_artifact: 10,
+  no_final_artifact: 20,
   goal_mismatch: 10,
   missing_required_content: 2,
-  missing_handoff: 2,
+  missing_handoff: 4,
 } as const;
 
 export type ArtifactDefectCode = keyof typeof ARTIFACT_DEFECT_POINTS;
@@ -101,8 +111,41 @@ export const MINIMUM_STEP_SCORE = 12;
 const OBVIOUS_NOISE_DEDUCTION_PER_FRAGMENT = 2;
 const MAX_OBVIOUS_NOISE_FRAGMENTS = 3;
 const MAX_SCORE_WITH_OBVIOUS_TYPO = MINIMUM_STEP_SCORE - 1;
+const MAX_GRANULARITY_SCORE_WITH_OBVIOUS_TYPO = 10;
 
-const LLM_SCORED_CRITERION_IDS = ["granularity", "context", "verifiability"] as const;
+const GRANULARITY_SUBCRITERIA = {
+  singlePurpose: "単一性",
+  size: "大きさ",
+  taskCoverage: "タスク数",
+  order: "順序",
+} as const;
+
+const CONTEXT_SUBCRITERIA = {
+  target: "対象",
+  inputMaterial: "入力資料",
+  constraints: "前提・制約",
+  priorResult: "前段の結果",
+} as const;
+
+const VERIFIABILITY_SUBCRITERIA = {
+  decisionCriteria: "判定条件",
+  evidence: "判定の根拠",
+  reproducibility: "再確認",
+  uncertaintyHandling: "判断保留",
+} as const;
+
+const SAFETY_SUBCRITERIA = {
+  permission: "権限",
+  secrets: "機密情報",
+  scope: "対象範囲",
+  environmentImpact: "環境への影響",
+} as const;
+
+const ARTIFACT_SUBCRITERIA = {
+  goalAlignment: "目的との整合",
+  requiredContent: "必要な内容",
+  handoff: "結果の引き継ぎ",
+} as const;
 
 const SAFETY_VIOLATION_LABELS: Readonly<Record<SafetyViolationCode, string>> = {
   privilege_escalation: "管理者権限・権限昇格の使用",
@@ -120,6 +163,23 @@ const SAFETY_VIOLATION_GUIDANCE: Readonly<Record<SafetyViolationCode, string>> =
   destructive_or_evasive_action: "読み取り中心の非破壊確認へ変更し、停止・復旧条件を明記してください。",
 };
 
+type SafetySubcriterionId = keyof typeof SAFETY_SUBCRITERIA;
+type SafetyControlStatus = "missing" | "partial" | "satisfied";
+
+const SAFETY_CONTROL_POINTS: Readonly<Record<SafetyControlStatus, number>> = {
+  missing: 0,
+  partial: 3,
+  satisfied: 5,
+};
+
+const SAFETY_VIOLATION_CATEGORIES: Readonly<Record<SafetyViolationCode, SafetySubcriterionId>> = {
+  privilege_escalation: "permission",
+  secret_content_access: "secrets",
+  secret_unprotected_output: "secrets",
+  unauthorized_target_access: "scope",
+  destructive_or_evasive_action: "environmentImpact",
+};
+
 const ARTIFACT_DEFECT_LABELS: Readonly<Record<ArtifactDefectCode, string>> = {
   no_final_artifact: "最終成果物が指定されていない",
   goal_mismatch: "成果物が演習目的と一致しない",
@@ -134,16 +194,41 @@ const ARTIFACT_DEFECT_GUIDANCE: Readonly<Record<ArtifactDefectCode, string>> = {
   missing_handoff: "前段の結果を後続タスクと最終成果物へ受け渡す方法を明記してください。",
 };
 
-const SCORE_PROPERTY = {
+const SUBSCORE_PROPERTY = {
   type: "integer",
   minimum: 0,
-  maximum: 20,
+  maximum: 5,
 } as const;
 
 const MESSAGE_PROPERTY = {
   type: "string",
   minLength: 1,
   maxLength: 240,
+} as const;
+
+const SUBCRITERION_PROPERTY = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    score: SUBSCORE_PROPERTY,
+    message: MESSAGE_PROPERTY,
+  },
+  required: ["score", "message"],
+} as const;
+
+const SAFETY_CONTROL_PROPERTY = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: { type: "string", enum: ["missing", "partial", "satisfied"] },
+    evidence: {
+      type: "string",
+      maxLength: 400,
+      description: "partialまたはsatisfiedの場合は，安全対策を示す入力中の原文を複写する。missingの場合は空文字にする。",
+    },
+    reason: MESSAGE_PROPERTY,
+  },
+  required: ["status", "evidence", "reason"],
 } as const;
 
 const DEDUCTION_PROPERTY = {
@@ -185,20 +270,37 @@ export const EVALUATION_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
-    criteria: {
-      type: "array",
-      minItems: 3,
-      maxItems: 3,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          id: { type: "string", enum: LLM_SCORED_CRITERION_IDS },
-          score: SCORE_PROPERTY,
-          message: MESSAGE_PROPERTY,
+    planEvaluation: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        granularity: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            taskCoverage: SUBCRITERION_PROPERTY,
+            order: SUBCRITERION_PROPERTY,
+          },
+          required: ["taskCoverage", "order"],
         },
-        required: ["id", "score", "message"],
+        verifiability: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            decisionCriteria: SUBCRITERION_PROPERTY,
+            evidence: SUBCRITERION_PROPERTY,
+            reproducibility: SUBCRITERION_PROPERTY,
+            uncertaintyHandling: SUBCRITERION_PROPERTY,
+          },
+          required: [
+            "decisionCriteria",
+            "evidence",
+            "reproducibility",
+            "uncertaintyHandling",
+          ],
+        },
       },
+      required: ["granularity", "verifiability"],
     },
     stepEvaluations: {
       type: "array",
@@ -213,19 +315,21 @@ export const EVALUATION_SCHEMA = {
             type: "object",
             additionalProperties: false,
             properties: {
-              score: SCORE_PROPERTY,
-              message: MESSAGE_PROPERTY,
+              singlePurpose: SUBCRITERION_PROPERTY,
+              size: SUBCRITERION_PROPERTY,
             },
-            required: ["score", "message"],
+            required: ["singlePurpose", "size"],
           },
           context: {
             type: "object",
             additionalProperties: false,
             properties: {
-              score: SCORE_PROPERTY,
-              message: MESSAGE_PROPERTY,
+              target: SUBCRITERION_PROPERTY,
+              inputMaterial: SUBCRITERION_PROPERTY,
+              constraints: SUBCRITERION_PROPERTY,
+              priorResult: SUBCRITERION_PROPERTY,
             },
-            required: ["score", "message"],
+            required: ["target", "inputMaterial", "constraints", "priorResult"],
           },
           obviousTypos: {
             type: "array",
@@ -261,6 +365,17 @@ export const EVALUATION_SCHEMA = {
       type: "object",
       additionalProperties: false,
       properties: {
+        controls: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            permission: SAFETY_CONTROL_PROPERTY,
+            secrets: SAFETY_CONTROL_PROPERTY,
+            scope: SAFETY_CONTROL_PROPERTY,
+            environmentImpact: SAFETY_CONTROL_PROPERTY,
+          },
+          required: ["permission", "secrets", "scope", "environmentImpact"],
+        },
         violations: {
           type: "array",
           maxItems: 5,
@@ -273,7 +388,7 @@ export const EVALUATION_SCHEMA = {
           },
         },
       },
-      required: ["violations"],
+      required: ["controls", "violations"],
     },
     artifactAssessment: {
       type: "object",
@@ -319,7 +434,7 @@ export const EVALUATION_SCHEMA = {
     },
   },
   required: [
-    "criteria",
+    "planEvaluation",
     "stepEvaluations",
     "safetyAssessment",
     "artifactAssessment",
@@ -341,11 +456,11 @@ function requiredString(value: unknown, field: string): string {
   return value.trim().slice(0, 240);
 }
 
-function boundedScore(value: unknown, field: string): number {
+function boundedSubscore(value: unknown, field: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`LLM response has an invalid ${field}.`);
   }
-  return Math.max(0, Math.min(20, Math.round(value)));
+  return Math.max(0, Math.min(5, Math.round(value)));
 }
 
 function stringList(value: unknown, field: string, limit: number): string[] {
@@ -360,6 +475,48 @@ function stringList(value: unknown, field: string, limit: number): string[] {
 
 function normalizedText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function safetyControlSatisfactionGap(
+  id: SafetySubcriterionId,
+  request: EvaluationRequest,
+): string | null {
+  const text = [
+    request.scenario.environment,
+    ...request.steps.flatMap((step) => [step.instruction, step.context]),
+  ].join("\n").normalize("NFKC");
+
+  switch (id) {
+    case "permission": {
+      const allowedPrivilege = /(?:(?:一般|標準|非特権|読み取り専用).{0,16}(?:ユーザー|アカウント|権限)|(?:ユーザー|アカウント|権限).{0,16}(?:一般|標準|非特権|読み取り専用))/u.test(text);
+      const noEscalation = /(?:管理者権限|root|sudo|権限昇格).{0,24}(?:使えない|使えません|使用できない|使用できません|使用しない|使用せず|使わない|使わず|用いない|用いず|禁止|なし)/iu.test(text);
+      return allowedPrivilege && noEscalation
+        ? null
+        : "使用可能な具体的権限と，権限昇格を禁止する記述の両方が必要です。";
+    }
+    case "secrets": {
+      const protection = /(?:マスキング|マスク|伏せ字|匿名化|暗号化)/u.test(text);
+      const handlingBoundary = /(?:保存|共有|送信).{0,24}(?:しない|禁止|限定|範囲|のみ|暗号化)|(?:外部|第三者).{0,16}(?:保存|共有|送信).{0,16}(?:しない|禁止)/u.test(text);
+      return protection && handlingBoundary
+        ? null
+        : "マスキング方法と，保存・共有・送信範囲の両方が必要です。";
+    }
+    case "scope": {
+      const targetBoundary = /(?:対象|検体|ファイル|ホスト|仮想マシン|\bVM\b|環境)/iu.test(text);
+      const connectionBoundary = /(?:外部通信|外部接続|ネットワーク|外部ホスト|実環境|本番環境).{0,24}(?:遮断|接続しない|通信しない|禁止|行わない|せず|しない)/u.test(text);
+      return targetBoundary && connectionBoundary
+        ? null
+        : "操作対象と，外部接続の許可・禁止範囲の両方が必要です。";
+    }
+    case "environmentImpact": {
+      const isolation = /(?:隔離|使い捨て|サンドボックス|仮想マシン|\bVM\b)/iu.test(text);
+      const stopCondition = /(?:(?:停止|中止|終了)条件|(?:異常|逸脱|検知|兆候|発生|失敗|超過).{0,24}(?:停止|中止|終了))/u.test(text);
+      const recoveryProcedure = /(?:スナップショット|バックアップ).{0,24}(?:から|へ)?(?:復元する|復元して|戻す|ロールバックする|ロールバックして)/u.test(text);
+      return isolation && stopCondition && recoveryProcedure
+        ? null
+        : "隔離方法，異常時の停止条件，具体的な復旧手順のすべてが必要です。";
+    }
+  }
 }
 
 function canonicalRequirementKey(value: string): string {
@@ -377,7 +534,7 @@ function isExplicitlySafeEvidence(code: SafetyViolationCode, evidence: string): 
       if (/(?:管理者権限|root|sudo|権限昇格).{0,16}(?:使用する|使う|取得する|要求する|実行する)/iu.test(text)) {
         return false;
       }
-      return /(?:管理者権限|root|sudo|権限昇格).{0,16}(?:使えない|使用しない|使わない|取得しない|要求しない|不要|禁止|なし)/iu.test(text);
+      return /(?:管理者権限|root|sudo|権限昇格).{0,16}(?:使えない|使えません|使用できない|使用できません|使用しない|使用せず|使わない|使わず|用いない|用いず|取得しない|要求しない|不要|禁止|なし)/iu.test(text);
     }
     case "secret_content_access": {
       if (/(?:秘密鍵|APIキー|トークン|パスワード|秘密情報).{0,20}(?:読み取る|参照する|アクセスする|取得する)/u.test(text)) {
@@ -403,6 +560,22 @@ function isExplicitlySafeEvidence(code: SafetyViolationCode, evidence: string): 
       }
       return /(?:DoS|破壊的変更|永続化|保護機構の回避|原本の変更).{0,32}(?:実行しない|変更しない|回避しない|行わない|しない|禁止|避ける|はせず|せず)/iu.test(text);
     }
+  }
+}
+
+function hasAffirmativeSafetyEvidence(code: SafetyViolationCode, evidence: string): boolean {
+  const text = evidence.normalize("NFKC");
+  switch (code) {
+    case "privilege_escalation":
+      return /(?:管理者権限|root(?:権限)?|sudo|権限昇格).{0,32}(?:用い(?:る|て)|使用(?:する|して)|使(?:う|って)|取得(?:する|して)|要求(?:する|して)|実行(?:する|して)|操作(?:する|して)|観測(?:する|して)|解析(?:する|して)|読み取(?:る|って|り)|読む)/iu.test(text);
+    case "secret_content_access":
+      return /(?:SSH秘密鍵|秘密鍵|APIキー|トークン|パスワード|秘密情報).{0,32}(?:読み取(?:る|って|り)|読む|参照(?:する|して)|アクセス(?:する|して)|取得(?:する|して)|表示(?:する|して)|確認(?:する|して)|出力(?:する|して)|報告(?:する|して))/iu.test(text);
+    case "secret_unprotected_output":
+      return /(?:マスキングせず|マスクせず|伏せ字にせず|平文(?:のまま|で)?|未保護(?:のまま|で)?|秘密情報.{0,16}そのまま).{0,24}(?:出力|保存|共有|送信|報告)/u.test(text);
+    case "unauthorized_target_access":
+      return /(?:外部通信|外部ホスト|外部サービス|実環境|本番環境|未許可環境|許可されていない.{0,8}(?:環境|ホスト)).{0,32}(?:接続(?:する|して)|操作(?:する|して)|送信(?:する|して)|通信(?:する|して)|アクセス(?:する|して))/u.test(text);
+    case "destructive_or_evasive_action":
+      return /(?:DoS|破壊的変更|永続化|保護機構(?:の)?回避|原本(?:の)?変更).{0,32}(?:実行(?:する|して)|変更(?:する|して)|回避(?:する|して)|行う|行って|仕掛ける)/iu.test(text);
   }
 }
 
@@ -543,6 +716,64 @@ function findingEvidence(value: string): string {
   return text.length > 140 ? `${text.slice(0, 139)}…` : text;
 }
 
+function safetyControlEvaluations(
+  value: unknown,
+  request: EvaluationRequest,
+): Map<SafetySubcriterionId, {
+  status: SafetyControlStatus;
+  score: number;
+  evidence: string;
+  reason: string;
+}> {
+  if (!isRecord(value)) {
+    throw new Error("LLM response is missing safety controls.");
+  }
+  const sourceTexts = [
+    request.scenario.title,
+    request.scenario.description,
+    request.scenario.goal,
+    request.scenario.environment,
+    request.scenario.materials ?? "",
+    ...request.steps.flatMap((step) => [step.title, step.instruction, step.context]),
+  ].map(normalizedText);
+  const controls = new Map<SafetySubcriterionId, {
+    status: SafetyControlStatus;
+    score: number;
+    evidence: string;
+    reason: string;
+  }>();
+  for (const id of Object.keys(SAFETY_SUBCRITERIA) as SafetySubcriterionId[]) {
+    const control = value[id];
+    if (!isRecord(control)
+      || (control.status !== "missing"
+        && control.status !== "partial"
+        && control.status !== "satisfied")) {
+      throw new Error(`LLM response has an invalid safety control ${id}.`);
+    }
+    const requestedStatus = control.status as SafetyControlStatus;
+    const satisfactionGap = requestedStatus === "satisfied"
+      ? safetyControlSatisfactionGap(id, request)
+      : null;
+    const status = satisfactionGap ? "partial" : requestedStatus;
+    const evidence = typeof control.evidence === "string"
+      ? control.evidence.trim().slice(0, 400)
+      : "";
+    if (requestedStatus !== "missing") {
+      if (!evidence || !sourceTexts.some((source) => source.includes(normalizedText(evidence)))) {
+        throw new Error(`LLM response has evidence not found for safety control ${id}.`);
+      }
+    }
+    controls.set(id, {
+      status,
+      score: SAFETY_CONTROL_POINTS[status],
+      evidence,
+      reason: satisfactionGap
+        ?? requiredString(control.reason, `safety control ${id} reason`),
+    });
+  }
+  return controls;
+}
+
 function safetyEvaluation(
   value: unknown,
   request: EvaluationRequest,
@@ -551,29 +782,40 @@ function safetyEvaluation(
   message: string;
   violationCodes: SafetyViolationCode[];
   findings: EvaluationFinding[];
+  subcriteria: EvaluationSubcriterion[];
 } {
   if (!isRecord(value) || !Array.isArray(value.violations)) {
     throw new Error("LLM response is missing safetyAssessment.");
   }
 
+  const controls = safetyControlEvaluations(value.controls, request);
   const violationMap = new Map<SafetyViolationCode, ValidatedDeduction>();
   const deterministicPrivilegeViolation = deterministicPrivilegeEscalation(request);
   if (deterministicPrivilegeViolation) {
     violationMap.set("privilege_escalation", deterministicPrivilegeViolation);
   }
   for (const rawViolation of value.violations) {
+    if (!isRecord(rawViolation)
+      || typeof rawViolation.code !== "string"
+      || !Object.prototype.hasOwnProperty.call(SAFETY_VIOLATION_POINTS, rawViolation.code)) {
+      validatedDeduction(
+        rawViolation,
+        "safety violation",
+        request,
+        SAFETY_VIOLATION_POINTS,
+      );
+      continue;
+    }
+    const code = rawViolation.code as SafetyViolationCode;
+    const evidence = requiredString(rawViolation.evidence, "safety violation evidence");
+    if (isExplicitlySafeEvidence(code, evidence)) continue;
+    if (!hasAffirmativeSafetyEvidence(code, evidence)) continue;
     const violation = validatedDeduction(
       rawViolation,
       "safety violation",
       request,
       SAFETY_VIOLATION_POINTS,
     );
-    const code = violation.code as SafetyViolationCode;
-    const evidence = requiredString(
-      isRecord(rawViolation) ? rawViolation.evidence : undefined,
-      "safety violation evidence",
-    );
-    if (isExplicitlySafeEvidence(code, evidence)) continue;
     const existing = violationMap.get(code);
     if (existing) {
       existing.stepIds = [...new Set([...existing.stepIds, ...violation.stepIds])];
@@ -582,28 +824,90 @@ function safetyEvaluation(
     }
   }
 
-  const deduction = [...violationMap.values()].reduce(
-    (sum, violation) => sum + violation.points,
-    0,
+  const violatedCategories = new Set(
+    [...violationMap.keys()].map((code) => SAFETY_VIOLATION_CATEGORIES[code]),
   );
-  const message = deduction === 0
-    ? "減点なし。肯定的な実行指示に安全境界違反はありません。"
-    : `${deduction}点減点（安全境界違反${violationMap.size}件）。${[...violationMap.keys()]
-      .map((code) => SAFETY_VIOLATION_LABELS[code])
-      .join("、")}`;
-  const findings = [...violationMap.entries()].map(([code, violation]) => ({
-    code,
-    label: SAFETY_VIOLATION_LABELS[code],
-    points: violation.points,
-    stepReferences: findingStepReferences(request, violation.stepIds),
-    evidence: findingEvidence(violation.evidence),
-    guidance: SAFETY_VIOLATION_GUIDANCE[code],
-  }));
+  const deduction = violatedCategories.size * 5;
+  const addition = [...controls.values()].reduce((sum, control) => sum + control.score, 0);
+  const message = `${addition}点加点（安全対策の明確さ），${deduction}点減点（安全境界違反）。`;
+  const findings = [...violatedCategories].map((category) => {
+    const entries = [...violationMap.entries()]
+      .filter(([code]) => SAFETY_VIOLATION_CATEGORIES[code] === category);
+    const [firstCode, firstViolation] = entries[0];
+    return {
+      code: firstCode,
+      label: entries.map(([code]) => SAFETY_VIOLATION_LABELS[code]).join("・"),
+      points: 5,
+      stepReferences: findingStepReferences(
+        request,
+        [...new Set(entries.flatMap(([, violation]) => violation.stepIds))],
+      ),
+      evidence: findingEvidence(firstViolation.evidence),
+      guidance: entries.map(([code]) => SAFETY_VIOLATION_GUIDANCE[code]).join(" ").slice(0, 240),
+    };
+  });
+  const subcriteria = Object.entries(SAFETY_SUBCRITERIA).map(([id, label]) => {
+    const control = controls.get(id as SafetySubcriterionId);
+    if (!control) throw new Error(`Missing normalized safety control ${id}.`);
+    const violated = violatedCategories.has(id as SafetySubcriterionId);
+    return {
+      id,
+      label,
+      score: Math.max(0, control.score - (violated ? 5 : 0)),
+      max: 5,
+      message: violated
+        ? `${control.reason} 安全境界違反があるため5点減点しました。`
+        : control.reason,
+    };
+  });
+  const score = subcriteria.reduce((sum, item) => sum + item.score, 0);
   return {
-    score: Math.max(0, 20 - deduction),
+    score,
     message: message.slice(0, 240),
     violationCodes: [...violationMap.keys()],
     findings,
+    subcriteria,
+  };
+}
+
+function requiredArtifactTerms(goal: string): string[] {
+  const normalizedGoal = goal.normalize("NFKC");
+  if (/(?:解析計画|調査計画|対応計画|計画書|計画)/u.test(normalizedGoal)) {
+    return ["解析計画", "調査計画", "対応計画", "計画書", "計画"];
+  }
+  if (/(?:報告書|レポート)/u.test(normalizedGoal)) {
+    return ["報告書", "レポート", "Markdown", "文書"];
+  }
+  if (/(?:手順書|手順)/u.test(normalizedGoal)) {
+    return ["手順書", "手順"];
+  }
+  if (/(?:一覧表|一覧)/u.test(normalizedGoal)) {
+    return ["一覧表", "一覧"];
+  }
+  if (/(?:記録|メモ|CSV|JSON)/iu.test(normalizedGoal)) {
+    return ["記録", "メモ", "CSV", "JSON"];
+  }
+  return [];
+}
+
+function deterministicMissingFinalArtifact(request: EvaluationRequest): ValidatedDeduction | null {
+  const artifactTerms = requiredArtifactTerms(request.scenario.goal);
+  if (artifactTerms.length === 0) return null;
+
+  const creationAction = /(?:作成|作る|まとめる|統合|生成|出力|記録|記載|提出|報告)/u;
+  const hasExplicitFinalArtifact = request.steps.some((step) => {
+    const text = `${step.title}\n${step.instruction}\n${step.context}`.normalize("NFKC");
+    return artifactTerms.some((term) => text.includes(term)) && creationAction.test(text);
+  });
+  if (hasExplicitFinalArtifact) return null;
+
+  const lastStep = request.steps.at(-1);
+  if (!lastStep) return null;
+  return {
+    code: "no_final_artifact",
+    points: ARTIFACT_DEFECT_POINTS.no_final_artifact,
+    stepIds: request.steps.map((step) => step.id),
+    evidence: lastStep.instruction || lastStep.title,
   };
 }
 
@@ -615,6 +919,7 @@ function artifactEvaluation(
   message: string;
   defectCodes: ArtifactDefectCode[];
   findings: EvaluationFinding[];
+  subcriteria: EvaluationSubcriterion[];
 } {
   if (!isRecord(value) || !isRecord(value.expectedArtifact) || !Array.isArray(value.defects)) {
     throw new Error("LLM response is missing artifactAssessment.");
@@ -630,6 +935,10 @@ function artifactEvaluation(
   const actualArtifactKey = canonicalRequirementKey(actualArtifact);
 
   const uniqueDefects = new Map<ArtifactDefectCode, ValidatedDeduction>();
+  const deterministicNoFinalArtifact = deterministicMissingFinalArtifact(request);
+  if (deterministicNoFinalArtifact) {
+    uniqueDefects.set("no_final_artifact", deterministicNoFinalArtifact);
+  }
   const missingContents: ValidatedDeduction[] = [];
   const missingContentKeys = new Set<string>();
   for (const rawDefect of value.defects) {
@@ -668,10 +977,12 @@ function artifactEvaluation(
     }
     missingContents.length = 0;
   }
-  const deduction = [...uniqueDefects.values(), ...missingContents].reduce(
-    (sum, defect) => sum + defect.points,
-    0,
-  );
+  const deduction = noFinalArtifact
+    ? 20
+    : [...uniqueDefects.values(), ...missingContents].reduce(
+      (sum, defect) => sum + defect.points,
+      0,
+    );
   const defectCount = uniqueDefects.size + missingContents.length;
   const defectLabels = [
     ...uniqueDefects.keys(),
@@ -695,15 +1006,78 @@ function artifactEvaluation(
       ? `最終成果物へ「${defect.missingItem}」を追加してください。`
       : ARTIFACT_DEFECT_GUIDANCE[code],
   }));
+  const goalAlignmentScore = noFinalArtifact || uniqueDefects.has("goal_mismatch") ? 0 : 10;
+  const requiredContentScore = noFinalArtifact ? 0 : Math.max(0, 6 - missingContents.length * 2);
+  const handoffScore = noFinalArtifact || uniqueDefects.has("missing_handoff") ? 0 : 4;
+  const subcriteria: EvaluationSubcriterion[] = [
+    {
+      id: "goalAlignment",
+      label: ARTIFACT_SUBCRITERIA.goalAlignment,
+      score: goalAlignmentScore,
+      max: 10,
+      message: noFinalArtifact
+        ? "最終成果物が指定されていません。"
+        : uniqueDefects.has("goal_mismatch")
+          ? "成果物が演習目的と一致していません。"
+          : "成果物は演習目的と整合しています。",
+    },
+    {
+      id: "requiredContent",
+      label: ARTIFACT_SUBCRITERIA.requiredContent,
+      score: requiredContentScore,
+      max: 6,
+      message: noFinalArtifact
+        ? "評価できる最終成果物がありません。"
+        : missingContents.length > 0
+          ? `必要な内容が${missingContents.length}件不足しています。`
+          : "目標に必要な内容が示されています。",
+    },
+    {
+      id: "handoff",
+      label: ARTIFACT_SUBCRITERIA.handoff,
+      score: handoffScore,
+      max: 4,
+      message: noFinalArtifact
+        ? "評価できる最終成果物がありません。"
+        : uniqueDefects.has("missing_handoff")
+          ? "前段の結果が最終成果物へ引き継がれていません。"
+          : "前段の結果を最終成果物へ引き継げます。",
+    },
+  ];
   return {
-    score: Math.max(0, 20 - deduction),
+    score: goalAlignmentScore + requiredContentScore + handoffScore,
     message: message.slice(0, 240),
     defectCodes: [
       ...uniqueDefects.keys(),
       ...missingContents.map(() => "missing_required_content" as const),
     ],
     findings,
+    subcriteria,
   };
+}
+
+function explicitContextCap(
+  id: string,
+  sourceStep: AnalysisStep,
+  stepIndex: number,
+): { score: number; message: string } | null {
+  const text = `${sourceStep.instruction}\n${sourceStep.context}`.normalize("NFKC");
+  if (id === "inputMaterial") {
+    const hasExplicitInput = /(?:sample\.exe|検体|ファイル|ログ|資料|証跡|データ|ハッシュ|設定|レジストリ|入力|記録|結果)/iu.test(text);
+    return hasExplicitInput
+      ? null
+      : { score: 0, message: "このタスクで使う入力資料・証跡が明記されていません。" };
+  }
+  if (id === "priorResult") {
+    if (stepIndex === 0 || /(?:独立タスク|前段(?:結果)?は不要|前のタスクは不要)/u.test(text)) {
+      return null;
+    }
+    const hasExplicitPriorResult = /(?:前(?:のタスク|段)|タスク\s*\d+|前工程|保全(?:結果|記録)|静的解析(?:結果|観測)|動的観測(?:結果|記録)|引き継|受け取|ハッシュ)/u.test(text);
+    return hasExplicitPriorResult
+      ? null
+      : { score: 0, message: "前のタスクから受け取る結果が明記されていません。" };
+  }
+  return null;
 }
 
 function stepDetailsFor(
@@ -728,7 +1102,42 @@ function stepDetailsFor(
     }
 
     const rawDetail = rawStep[criterion] as UnknownRecord;
-    const modelScore = boundedScore(rawDetail.score, `task ${index + 1} ${criterion} score`);
+    const definitions = criterion === "granularity"
+      ? GRANULARITY_SUBCRITERIA
+      : CONTEXT_SUBCRITERIA;
+    const ids = criterion === "granularity"
+      ? (["singlePurpose", "size"] as const)
+      : (["target", "inputMaterial", "constraints", "priorResult"] as const);
+    let subcriteria = ids.map((id) => {
+      const rawSubcriterion = rawDetail[id];
+      if (!isRecord(rawSubcriterion)) {
+        throw new Error(`LLM response is missing task ${index + 1} ${criterion} ${id}.`);
+      }
+      return {
+        id,
+        label: definitions[id as keyof typeof definitions],
+        score: boundedSubscore(
+          rawSubcriterion.score,
+          `task ${index + 1} ${criterion} ${id} score`,
+        ),
+        max: 5,
+        message: requiredString(
+          rawSubcriterion.message,
+          `task ${index + 1} ${criterion} ${id} message`,
+        ),
+      };
+    });
+    if (criterion === "context") {
+      subcriteria = subcriteria.map((item) => {
+        const cap = explicitContextCap(item.id, sourceStep, index);
+        return cap && item.score > cap.score
+          ? { ...item, score: cap.score, message: cap.message }
+          : item;
+      });
+    }
+    const modelScore = criterion === "granularity"
+      ? subcriteria.reduce((sum, item) => sum + item.score, 0) * 2
+      : subcriteria.reduce((sum, item) => sum + item.score, 0);
     const sourceText = criterion === "granularity" ? sourceStep.instruction : sourceStep.context;
     const clearlyNonInstructional = isClearlyNonInstructional(sourceText);
     const obviousTypos = clearlyNonInstructional
@@ -736,20 +1145,33 @@ function stepDetailsFor(
       : validatedObviousTypos(rawStep.obviousTypos, sourceStep, criterion, index + 1);
     const typoDeduction = obviousTypos.length * OBVIOUS_NOISE_DEDUCTION_PER_FRAGMENT;
     const scoreAfterTypoDeduction = Math.max(0, modelScore - typoDeduction);
-    const modelMessage = requiredString(
-      rawDetail.message,
-      `task ${index + 1} ${criterion} message`,
-    );
+    const weakest = [...subcriteria].sort((left, right) => left.score - right.score)[0];
+    const modelMessage = `${subcriteria
+      .map((item) => `${item.label}${item.score}/${item.max}`)
+      .join("，")}．${weakest.message}`.slice(0, 240);
+    const typoCap = criterion === "granularity"
+      ? MAX_GRANULARITY_SCORE_WITH_OBVIOUS_TYPO
+      : MAX_SCORE_WITH_OBVIOUS_TYPO;
+    const finalScore = clearlyNonInstructional
+      ? 0
+      : obviousTypos.length > 0
+        ? Math.min(scoreAfterTypoDeduction, typoCap)
+        : modelScore;
+    const effectiveSubscoreTotal = criterion === "granularity" ? finalScore / 2 : finalScore;
+    const rawSubscoreTotal = subcriteria.reduce((sum, item) => sum + item.score, 0);
+    const adjustedSubcriteria = subcriteria.map((item) => ({
+      ...item,
+      score: rawSubscoreTotal === 0
+        ? 0
+        : Math.round((item.score * effectiveSubscoreTotal / rawSubscoreTotal) * 10) / 10,
+    }));
     return {
       stepId: sourceStep.id,
       stepNumber: index + 1,
       title: sourceStep.title.trim() || `分析タスク ${index + 1}`,
-      score: clearlyNonInstructional
-        ? Math.min(modelScore, 5)
-        : obviousTypos.length > 0
-          ? Math.min(scoreAfterTypoDeduction, MAX_SCORE_WITH_OBVIOUS_TYPO)
-          : modelScore,
+      score: finalScore,
       max: 20,
+      subcriteria: adjustedSubcriteria,
       message: clearlyNonInstructional
         ? criterion === "granularity"
           ? "指示が空欄、プレースホルダー、または意味のない反復文字列です。"
@@ -757,7 +1179,7 @@ function stepDetailsFor(
         : obviousTypos.length > 0
           ? feedbackWithNote(
             modelMessage,
-            `明白な誤字${obviousTypos.length}件（「${obviousTypos[0].evidence}」）。固定減点${typoDeduction}点後、11点を上限としました。`,
+            `明白な誤字${obviousTypos.length}件（「${obviousTypos[0].evidence}」）。固定減点${typoDeduction}点後、${typoCap}点を上限としました。`,
           )
           : modelMessage,
     };
@@ -816,21 +1238,46 @@ function rankedImprovements(
           });
           continue;
         }
+        const weakest = [...(detail.subcriteria ?? [])].sort(
+          (left, right) => left.score / left.max - right.score / right.max,
+        )[0];
+        const granularityMessage = weakest?.id === "size"
+          ? `単独で委任できる大きさに調整（タスク${detail.stepNumber}）`
+          : `主要な作業を1つに分割（タスク${detail.stepNumber}）`;
+        const contextMessage = weakest
+          ? `${weakest.label}をコンテキストへ追加（タスク${detail.stepNumber}）`
+          : `コンテキストを補足（タスク${detail.stepNumber}）`;
         candidates.push({
           impact,
           priority: 2,
           message: criterion.id === "granularity"
-            ? `指示を分割（タスク${detail.stepNumber}）`
-            : `コンテキストに対象・証跡・完了条件を追加（タスク${detail.stepNumber}）`,
+            ? granularityMessage
+            : contextMessage,
         });
+      }
+      if (criterion.id === "granularity") {
+        for (const subcriterion of criterion.subcriteria?.filter(
+          (item) => (item.id === "taskCoverage" || item.id === "order") && item.score < item.max,
+        ) ?? []) {
+          candidates.push({
+            impact: subcriterion.max - subcriterion.score,
+            priority: 2,
+            message: subcriterion.id === "taskCoverage"
+              ? "目的に必要な工程をタスクとして追加"
+              : "タスクの依存関係に合わせて順序を修正",
+          });
+        }
       }
       continue;
     }
     if (criterion.id === "verifiability" && criterion.score < criterion.max) {
+      const weakest = [...(criterion.subcriteria ?? [])].sort(
+        (left, right) => left.score / left.max - right.score / right.max,
+      )[0];
       candidates.push({
         impact: criterion.max - criterion.score,
         priority: 1,
-        message: "成功条件・証跡・再確認方法を明記",
+        message: weakest ? `検証可能性の「${weakest.label}」を明記` : "検証条件を明記",
       });
     }
   }
@@ -845,6 +1292,123 @@ function rankedImprovements(
     .map((candidate) => candidate.message.slice(0, 320));
 }
 
+function requiredSubcriterion(
+  group: UnknownRecord,
+  id: string,
+  label: string,
+  field: string,
+): EvaluationSubcriterion {
+  const value = group[id];
+  if (!isRecord(value)) {
+    throw new Error(`LLM response is missing ${field} ${id}.`);
+  }
+  return {
+    id,
+    label,
+    score: boundedSubscore(value.score, `${field} ${id} score`),
+    max: 5,
+    message: requiredString(value.message, `${field} ${id} message`),
+  };
+}
+
+function averageStepSubcriterion(
+  details: EvaluationStepDetail[],
+  id: string,
+  label: string,
+): EvaluationSubcriterion {
+  const items = details.flatMap((detail) =>
+    detail.subcriteria?.filter((item) => item.id === id) ?? []);
+  if (items.length !== details.length) {
+    throw new Error(`LLM response is missing step subcriterion ${id}.`);
+  }
+  const score = Math.round(
+    (items.reduce((sum, item) => sum + item.score, 0) / Math.max(items.length, 1)) * 10,
+  ) / 10;
+  const weakest = [...items].sort((left, right) => left.score - right.score)[0];
+  return {
+    id,
+    label,
+    score,
+    max: 5,
+    message: weakest.message,
+  };
+}
+
+function criterionMessage(subcriteria: EvaluationSubcriterion[]): string {
+  const weakest = [...subcriteria].sort(
+    (left, right) => left.score / left.max - right.score / right.max,
+  )[0];
+  return `${subcriteria.map((item) => `${item.label}${item.score}/${item.max}`).join("，")}．${weakest.message}`
+    .slice(0, 240);
+}
+
+function taskCoverageCap(request: EvaluationRequest): number {
+  const goal = request.scenario.goal.normalize("NFKC");
+  const steps = request.steps
+    .map((step) => `${step.title}\n${step.instruction}\n${step.context}`)
+    .join("\n")
+    .normalize("NFKC");
+  const requirements = [
+    { goal: /(?:観測事実|事実)/u, steps: /(?:観測|事実)/u },
+    { goal: /(?:推測|解釈|仮説)/u, steps: /(?:推測|解釈|仮説)/u },
+    { goal: /(?:次の確認事項|追加確認|未確認事項)/u, steps: /(?:次の確認|追加確認|未確認)/u },
+    { goal: /根拠/u, steps: /(?:根拠|証跡)/u },
+    { goal: /優先度/u, steps: /優先度/u },
+    { goal: /緩和策/u, steps: /緩和策/u },
+  ];
+  const missingCount = requirements.filter(
+    (requirement) => requirement.goal.test(goal) && !requirement.steps.test(steps),
+  ).length;
+  if (missingCount === 0) return 5;
+  if (missingCount === 1) return 3;
+  if (missingCount === 2) return 2;
+  return 0;
+}
+
+function applyPlanScoringCaps(
+  subcriteria: EvaluationSubcriterion[],
+  request: EvaluationRequest,
+  criterion: "granularity" | "verifiability",
+): EvaluationSubcriterion[] {
+  if (criterion === "granularity") {
+    const coverageCap = taskCoverageCap(request);
+    return subcriteria.map((item) => item.id === "taskCoverage" && item.score > coverageCap
+      ? {
+        ...item,
+        score: coverageCap,
+        message: "goalに含まれる必須要素がタスクに明記されていません。",
+      }
+      : item);
+  }
+
+  const text = request.steps
+    .map((step) => `${step.instruction}\n${step.context}`)
+    .join("\n")
+    .normalize("NFKC");
+  const caps: Record<string, { score: number; message: string }> = {
+    decisionCriteria: /(?:正常|異常|成功条件|失敗条件|完了条件|判定条件|期待結果|合格条件)/u.test(text)
+      ? { score: 5, message: "" }
+      : { score: 0, message: "正常・異常または成功・失敗の判定条件が明記されていません。" },
+    evidence: /(?:記録|ログ|証跡|根拠|ハッシュ|スクリーンショット|観測結果)/u.test(text)
+      ? { score: 5, message: "" }
+      : { score: 0, message: "判断根拠として残す記録が明記されていません。" },
+    reproducibility: /(?:再確認|再実行|再現|第三者|同じ.{0,8}(?:手順|判断)|照合)/u.test(text)
+      ? { score: 5, message: "" }
+      : { score: 0, message: "第三者が同じ判断を再確認する方法が明記されていません。" },
+    uncertaintyHandling: /(?:判断(?:を)?保留|保留する|追加確認|確認依頼|判断を止め|証跡.{0,12}不足|情報.{0,12}不足)/u.test(text)
+      ? { score: 5, message: "" }
+      : /(?:断定しない|断定せず)/u.test(text)
+        ? { score: 2, message: "断定を避けていますが，判断保留後の追加確認方法がありません。" }
+        : { score: 0, message: "証跡不足時に判断を保留し，追加確認する方法が明記されていません。" },
+  };
+  return subcriteria.map((item) => {
+    const cap = caps[item.id];
+    return cap && item.score > cap.score
+      ? { ...item, score: cap.score, message: cap.message }
+      : item;
+  });
+}
+
 /**
  * Validate a model response and combine LLM judgments with deterministic
  * safety, artifact, and obvious-noise scoring rules.
@@ -855,57 +1419,83 @@ export function normalizeEvaluation(
   provider: EvaluationProvider,
   model: string,
 ): EvaluationResult {
-  if (!isRecord(value) || !Array.isArray(value.criteria)) {
+  if (!isRecord(value) || !isRecord(value.planEvaluation)) {
     throw new Error("LLM response is not a valid evaluation object.");
   }
 
   const safety = safetyEvaluation(value.safetyAssessment, request);
   const artifact = artifactEvaluation(value.artifactAssessment, request);
-  const rawCriteria = value.criteria.filter(isRecord);
-  const criteria = CRITERION_SPECS.map((spec) => {
-    if (spec.id === "safety") {
-      return {
-        id: spec.id,
-        label: spec.label,
-        score: safety.score,
-        max: spec.max,
-        message: safety.message,
-        ...(safety.findings.length > 0 ? { findings: safety.findings } : {}),
-      };
-    }
-    if (spec.id === "artifact") {
-      return {
-        id: spec.id,
-        label: spec.label,
-        score: artifact.score,
-        max: spec.max,
-        message: artifact.message,
-        ...(artifact.findings.length > 0 ? { findings: artifact.findings } : {}),
-      };
-    }
+  const planEvaluation = value.planEvaluation;
+  if (!isRecord(planEvaluation.granularity) || !isRecord(planEvaluation.verifiability)) {
+    throw new Error("LLM response is missing planEvaluation details.");
+  }
+  const granularitySteps = stepDetailsFor(value.stepEvaluations, request.steps, "granularity");
+  const contextSteps = stepDetailsFor(value.stepEvaluations, request.steps, "context");
+  const granularitySubcriteria = applyPlanScoringCaps([
+    averageStepSubcriterion(granularitySteps, "singlePurpose", GRANULARITY_SUBCRITERIA.singlePurpose),
+    averageStepSubcriterion(granularitySteps, "size", GRANULARITY_SUBCRITERIA.size),
+    requiredSubcriterion(
+      planEvaluation.granularity,
+      "taskCoverage",
+      GRANULARITY_SUBCRITERIA.taskCoverage,
+      "plan granularity",
+    ),
+    requiredSubcriterion(
+      planEvaluation.granularity,
+      "order",
+      GRANULARITY_SUBCRITERIA.order,
+      "plan granularity",
+    ),
+  ], request, "granularity");
+  const contextSubcriteria = Object.entries(CONTEXT_SUBCRITERIA).map(([id, label]) =>
+    averageStepSubcriterion(contextSteps, id, label));
+  const verifiabilitySubcriteria = applyPlanScoringCaps(
+    Object.entries(VERIFIABILITY_SUBCRITERIA).map(([id, label]) =>
+      requiredSubcriterion(planEvaluation.verifiability as UnknownRecord, id, label, "verifiability")),
+    request,
+    "verifiability",
+  );
 
-    const rawCriterion = rawCriteria.find((criterion) => criterion.id === spec.id);
-    if (!rawCriterion) {
-      throw new Error(`LLM response is missing criterion ${spec.id}.`);
-    }
-
-    const criterion: EvaluationCriterion = {
-      id: spec.id,
+  const scoredCriterion = (
+    id: "granularity" | "context" | "verifiability",
+    subcriteria: EvaluationSubcriterion[],
+    stepDetails?: EvaluationStepDetail[],
+  ): EvaluationCriterion => {
+    const spec = CRITERION_SPECS.find((item) => item.id === id);
+    if (!spec) throw new Error(`Unknown criterion ${id}.`);
+    return {
+      id,
       label: spec.label,
-      score: boundedScore(rawCriterion.score, `${spec.id} score`),
+      score: Math.round(subcriteria.reduce((sum, item) => sum + item.score, 0)),
       max: spec.max,
-      message: requiredString(rawCriterion.message, `${spec.id} message`),
+      message: criterionMessage(subcriteria),
+      subcriteria,
+      ...(stepDetails ? { stepDetails } : {}),
     };
-
-    if (spec.id === "granularity" || spec.id === "context") {
-      criterion.stepDetails = stepDetailsFor(value.stepEvaluations, request.steps, spec.id);
-      criterion.score = Math.round(
-        criterion.stepDetails.reduce((sum, detail) => sum + detail.score, 0) /
-          Math.max(criterion.stepDetails.length, 1),
-      );
-    }
-    return criterion;
-  });
+  };
+  const criteria: EvaluationCriterion[] = [
+    scoredCriterion("granularity", granularitySubcriteria, granularitySteps),
+    scoredCriterion("context", contextSubcriteria, contextSteps),
+    {
+      id: "safety",
+      label: CRITERION_SPECS.find((item) => item.id === "safety")?.label ?? "安全性・権限境界",
+      score: safety.score,
+      max: 20,
+      message: safety.message,
+      subcriteria: safety.subcriteria,
+      ...(safety.findings.length > 0 ? { findings: safety.findings } : {}),
+    },
+    scoredCriterion("verifiability", verifiabilitySubcriteria),
+    {
+      id: "artifact",
+      label: CRITERION_SPECS.find((item) => item.id === "artifact")?.label ?? "成果物の明確さ",
+      score: artifact.score,
+      max: 20,
+      message: artifact.message,
+      subcriteria: artifact.subcriteria,
+      ...(artifact.findings.length > 0 ? { findings: artifact.findings } : {}),
+    },
+  ];
 
   const total = criteria.reduce((sum, criterion) => sum + criterion.score, 0);
   const gateFailures: string[] = [];

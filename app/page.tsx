@@ -850,6 +850,19 @@ export default function Home() {
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
                     ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
+                    {criterion.subcriteria && criterion.subcriteria.length > 0 && (
+                      <ul className="criterion-subcriteria">
+                        {criterion.subcriteria.map((subcriterion) => (
+                          <li key={`${criterion.id}-${subcriterion.id}`}>
+                            <div>
+                              <strong>{subcriterion.label}</strong>
+                              <span>{subcriterion.score}<small>/{subcriterion.max}</small></span>
+                            </div>
+                            <p>{subcriterion.message}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                     {criterion.findings && criterion.findings.length > 0 && (
                       <ul className="criterion-findings">
                         {criterion.findings.map((finding) => (
