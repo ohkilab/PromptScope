@@ -77,6 +77,7 @@ test("Ollamaの構造化判定を採点し、途中で切れた応答は確定�
   t.mock.method(globalThis, "fetch", async (url, init) => {
     assert.equal(url, "http://localhost:11434/api/chat");
     const body = JSON.parse(init.body);
+    assert.equal(body.think, false);
     assert.equal(body.options.temperature, 0); assert.equal(body.options.num_ctx, 32768);
     assert.equal(body.format.additionalProperties, false);
     return Response.json({ message: { content: JSON.stringify(raw) }, done_reason: finish });

@@ -329,7 +329,7 @@ async function evaluateWithOllama(
       model: config.model,
       messages,
       stream: false,
-      think: true,
+      think: false,
       format: schema,
       options: {
         temperature: 0,
