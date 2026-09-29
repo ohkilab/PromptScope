@@ -82,6 +82,7 @@ test("画面操作と安全な演習シナリオを定義する", async () => {
 
 test("5つの評価項目とLLM利用時の安全策を定義する", async () => {
   const evaluator = await readSource("app/lib/evaluator.ts");
+  const rubric = await readSource("app/lib/rubric.ts");
   const llmServer = await readSource("app/lib/llm/server.ts");
 
   assert.match(evaluator, /const\s+CRITERION_SPECS\s*=/);
@@ -89,29 +90,27 @@ test("5つの評価項目とLLM利用時の安全策を定義する", async () =
     assert.match(evaluator, new RegExp(`\\b${criterionId}\\b`));
   }
   for (const pattern of [
-    /\/api\/chat/,
+    /\/api\/generate/,
     /openrouter\.ai\/api\/v1\/chat\/completions/,
     /response_format/,
-    /1つの欠点は、それを担当する1つの小項目でだけ評価/,
-    /点数の合計や平均はサーバーが計算/,
-    /singlePurpose/,
-    /uncertaintyHandling/,
-    /禁止・否定、マスキング、通信の遮断は違反ではありません/,
-    /1つでも明記されていなければpartial以下/,
-    /スナップショットがあることや復元可能であることだけでは/,
-    /管理者権限、root、sudoなどを使う・求める/,
-    /秘密鍵、APIキー、パスワードなどの中身を読む/,
-    /scenario\.goalから「必要な成果物」/,
-    /成果物がgoalと合わない/,
+    /statusの基準/,
+    /判定項目/,
+    /taskRoles/,
+    /EVALUATION_CONCURRENCY/,
+    /rubricScenarioId/,
   ]) {
     assert.match(llmServer, pattern);
   }
   for (const pattern of [
-    /safetyAssessment/,
-    /artifactAssessment/,
-    /SAFETY_VIOLATION_POINTS/,
-    /ARTIFACT_DEFECT_POINTS/,
+    /statusPoints/,
+    /AXIS_MINIMUM/,
+    /STEP_AXIS_MINIMUM/,
+    /UNSAFE_CAP/,
+    /RUBRIC_VERSION/,
   ]) {
     assert.match(evaluator, pattern);
+  }
+  for (const typeId of ["malware", "vulnerability", "logs", "incident-response", "other", "tutorial"]) {
+    assert.match(rubric, new RegExp(`\\b${typeId}\\b`));
   }
 });

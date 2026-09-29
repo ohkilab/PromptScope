@@ -10,6 +10,9 @@ const { d1, r2 } = hostingConfig;
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
+// WSL does not deliver file change events for Windows drives mounted under /mnt,
+// so edits are never picked up (client or server) without polling.
+const isWslWindowsDrive = process.platform === "linux" && /^\/mnt\/[a-z]\//.test(process.cwd());
 
 const localBindingConfig = {
   main: "./worker/index.ts",
@@ -46,7 +49,9 @@ export default defineConfig(async () => {
   return {
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
-      : undefined,
+      : isWslWindowsDrive
+        ? { watch: { usePolling: true, interval: 300 } }
+        : undefined,
     plugins: [
       vinext(),
       sites(),

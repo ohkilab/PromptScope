@@ -1052,6 +1052,29 @@ button:disabled {
   line-height: 1.45;
 }
 
+.score-rules {
+  margin: 5px 0 0;
+  color: var(--ink-faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.deduction-block {
+  margin-bottom: 10px;
+}
+
+.deduction-block > .mono-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--terracotta);
+  font-size: 9px;
+}
+
+.feedback-block .criterion-finding-evidence {
+  color: var(--terracotta);
+  overflow-wrap: anywhere;
+}
+
 .criterion-subcriteria {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1131,11 +1154,6 @@ button:disabled {
 .criterion .criterion-finding-location {
   color: var(--ink);
   font-weight: 600;
-}
-
-.criterion .criterion-finding-evidence {
-  color: var(--terracotta);
-  overflow-wrap: anywhere;
 }
 
 .step-evaluation {

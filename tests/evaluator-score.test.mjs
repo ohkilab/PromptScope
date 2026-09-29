@@ -1,510 +1,294 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { tsImport } from "tsx/esm/api";
 
-import {
-  normalizeEvaluation,
-} from "../app/lib/evaluator.ts";
+const {
+  analyzeStepText,
+  resolveRubric,
+  sentenceOptions,
+  scoreEvaluation,
+  validatePlanEvaluation,
+  validateStepEvaluation,
+} = await tsImport("../app/lib/evaluator.ts", import.meta.url);
+const { rubricFor, RUBRIC_VERSION, statusPoints } = await tsImport("../app/lib/rubric.ts", import.meta.url);
 
-const defaultRequest = {
+const request = {
   scenario: {
-    title: "ログ調査",
-    description: "提供された監査ログを安全に調査する",
-    goal: "安全担当者が優先度と緩和策を判断できる報告書を作る",
-    environment: "隔離された検証環境で，読み取り専用の一般ユーザー権限だけを使用し，管理者権限と権限昇格は禁止する．対象はローカル監査ログだけとし，外部通信は禁止する．異常を検知した場合は作業を中止し，スナップショットから復元する．",
-  },
-  steps: [{
-    id: "report",
-    title: "報告書を作成する",
-    instruction: "監査ログの根拠、優先度、緩和策、未確認事項、成功条件をMarkdown報告書にまとめ、同じ証跡で再確認し、証跡不足時は判断を保留する",
-    context: "監査ログを入力とし、読み取り専用で確認する．秘密情報はマスキングし，保存は検証環境内だけに限定して外部へ共有・送信しない",
-  }],
-};
-
-const perfectMalwareRequest = {
-  scenario: {
-    title: "sample.exeの安全な解析計画",
-    description: "架空の検体について，保全，静的確認，動的観測の結果を安全に統合する",
-    goal: "外部に影響を与えず，観測事実，解釈，未確認事項，推奨する安全な追加確認を分けた解析計画を作る",
-    environment: "ネットワーク遮断済みの使い捨て仮想マシンを使用する．読み取り専用の一般ユーザー権限だけを許可し，管理者権限，root，sudo，権限昇格は禁止する．操作対象は隔離ラボの架空のsample.exeだけとし，外部ホストへの接続は禁止する．機密情報はマスキングし，記録は隔離ラボ内だけに保存して外部へ共有・送信しない．外部接続の試行，想定外の書き込み，権限要求を異常として検知した場合は直ちに作業を中止し，仮想マシンを停止して取得済みスナップショットから復元する",
+    rubricScenarioId: "vulnerability",
+    title: "検証用サービスのリスク調査",
+    description: "ローカル検証サービスを安全に調べる",
+    goal: "リスクと対応優先度を判断できる報告書を作る",
+    environment: "許可済みのローカル検証環境",
   },
   steps: [
     {
-      id: "perfect-preserve",
-      title: "解析用コピーを保全する",
-      instruction: "原本を変更せずにsample.exeの解析用コピーを作り，原本とコピーのSHA-256，ファイルサイズ，取得時刻，作業者を保全記録へ記載する．成功条件は両方のSHA-256が一致することとし，不一致なら作業を中止して理由を未確認事項として記録する",
-      context: "入力は隔離ラボの/lab/inbox/sample.exeである．読み取り専用の一般ユーザー権限だけを使い，管理者権限と権限昇格は禁止する．機密情報はマスキングし，保全記録は隔離ラボ内だけに保存して外部へ共有・送信しない．このタスクは最初のタスクなので前段結果は不要である",
+      id: "scope",
+      title: "対象と制約を整理する",
+      instruction: "提供資料から対象と許可範囲を確認し、対象一覧を作る。",
+      context: "入力は提供されたサービス設定と監査ログです。",
     },
     {
-      id: "perfect-static",
-      title: "静的観測を記録する",
-      instruction: "解析用コピーを実行せず，形式，署名，ハッシュ，文字列，依存関係を観測し，各結果を証跡ID付きの静的観測記録へ事実として記載する．成功条件は全観測項目に証跡IDと取得方法があることとし，判断材料が足りない項目は判断を保留して追加確認事項にする",
-      context: "入力はタスク1の解析用コピー，保全記録，原本とコピーのSHA-256である．両方のSHA-256が一致した場合だけ進める．ネットワーク遮断済み仮想マシンと読み取り専用の一般ユーザー権限を使い，検体は実行しない．静的観測記録は隔離ラボ内だけに保存する",
-    },
-    {
-      id: "perfect-dynamic",
-      title: "動的観測を記録する",
-      instruction: "スナップショットから復元したテスト仮想マシンで解析用コピーを1回だけ実行し，実行前後のプロセス，ファイル，レジストリ相当，遮断済み通信ログの差分を証跡ID付きの動的観測記録へ事実として記載する．成功条件は実行前後の記録と差分がそろうこととし，欠落があれば判断を保留して追加確認事項にする",
-      context: "入力はタスク1の解析用コピーと保全記録，タスク2の静的観測記録である．外部通信は禁止し，無害なダミーデータだけを使う．外部接続の試行，想定外の書き込み，権限要求を検知した場合は直ちに作業を中止し，仮想マシンを停止してスナップショットから復元する．記録は隔離ラボ内だけに保存する",
-    },
-    {
-      id: "perfect-report",
-      title: "解析計画を作成する",
-      instruction: "保全記録，静的観測記録，動的観測記録を統合し，観測事実，証跡に基づく解釈，未確認事項，推奨する安全な追加確認，成功・失敗条件を分けたMarkdown解析計画を作成する．各記述に証跡IDを付け，第三者が同じ入力ハッシュ，ツール版，手順，スナップショットで再確認できるようにする．証跡が不足する結論は判断を保留し，必要な追加証跡を明記する",
-      context: "入力はタスク1の保全記録，タスク2の静的観測記録，タスク3の動的観測記録である．最終成果物は隔離ラボ内のanalysis-plan.mdとし，機密情報をマスキングして外部へ共有・送信しない．観測事実と解釈を混同せず，確認できない意図や悪性を断定しない",
+      id: "report",
+      title: "根拠付き報告書を作る",
+      instruction: "観測結果と根拠を照合し、優先度・緩和策・未確認事項を報告書にまとめる。",
+      context: "前段の対象一覧と監査ログを使い、第三者が再確認できる形で記録します。",
     },
   ],
 };
 
-function rawEvaluation(request = defaultRequest, overrides = {}) {
-  const baseSubscore = overrides.subscore ?? 5;
-  const scored = (score, message) => ({ score: score ?? baseSubscore, message });
-  const safetyControl = (id, defaultEvidence) => {
-    const status = overrides.safetyControls?.[id]?.status ?? "satisfied";
-    return {
-      status,
-      evidence: status === "missing"
-        ? ""
-        : overrides.safetyControls?.[id]?.evidence ?? defaultEvidence,
-      reason: overrides.safetyControls?.[id]?.reason ?? `${id}の安全対策を確認した`,
-    };
-  };
+function firstSentence(step) {
+  return step.instruction.split("。")[0] + "。";
+}
+
+/** statuses: { key: status } for the plan, { "stepId:key": status } for a task. */
+function rawPlan(targetRequest, rubric, overrides = {}) {
   return {
-    planEvaluation: {
-      granularity: {
-        taskCoverage: scored(overrides.planScores?.taskCoverage, "必要な工程を確認した"),
-        order: scored(overrides.planScores?.order, "依存関係を確認した"),
-      },
-      verifiability: {
-        decisionCriteria: scored(overrides.planScores?.decisionCriteria, "判定条件を確認した"),
-        evidence: scored(overrides.planScores?.evidence, "判定根拠を確認した"),
-        reproducibility: scored(overrides.planScores?.reproducibility, "再確認方法を確認した"),
-        uncertaintyHandling: scored(overrides.planScores?.uncertaintyHandling, "判断保留を確認した"),
-      },
-    },
-    stepEvaluations: request.steps.map((step, index) => ({
+    results: rubric.planEntries.map((entry) => {
+      const status = overrides.statuses?.[entry.key] ?? "met";
+      return {
+        key: entry.key,
+        status,
+        evidence: status === "missing" ? "" : firstSentence(targetRequest.steps[0]),
+        reason: status === "met" ? "" : `${entry.label}が不足しています。`,
+      };
+    }),
+    taskRoles: targetRequest.steps.map((step, index) => ({
       stepId: step.id,
-      stepNumber: index + 1,
-      title: step.title || `分析タスク ${index + 1}`,
-      granularity: {
-        singlePurpose: scored(overrides.stepSubscores?.[index]?.singlePurpose, "主要作業を確認した"),
-        size: scored(overrides.stepSubscores?.[index]?.size, "委任可能な大きさを確認した"),
-      },
-      context: {
-        target: scored(overrides.stepSubscores?.[index]?.target, "対象を確認した"),
-        inputMaterial: scored(overrides.stepSubscores?.[index]?.inputMaterial, "入力資料を確認した"),
-        constraints: scored(overrides.stepSubscores?.[index]?.constraints, "前提と制約を確認した"),
-        priorResult: scored(overrides.stepSubscores?.[index]?.priorResult, "前段の結果を確認した"),
-      },
-      obviousTypos: overrides.obviousTypos?.[index] ?? [],
+      phase: overrides.roles?.[step.id] ?? rubric.phases[Math.min(index, rubric.phases.length - 1)].id,
+      redundant: overrides.redundant?.includes(step.id) ?? false,
     })),
-    safetyAssessment: {
-      controls: {
-        permission: safetyControl("permission", request.scenario.environment),
-        secrets: safetyControl("secrets", request.steps[0]?.context ?? request.scenario.environment),
-        scope: safetyControl("scope", request.scenario.environment),
-        environmentImpact: safetyControl("environmentImpact", request.scenario.environment),
-      },
-      violations: overrides.violations ?? [],
-    },
-    artifactAssessment: {
-      expectedArtifact: {
-        purpose: "安全担当者の判断を支援する",
-        requiredContents: ["根拠", "優先度", "緩和策", "未確認事項"],
-      },
-      actualArtifact: overrides.actualArtifact ?? "根拠を含むMarkdown報告書",
-      defects: overrides.defects ?? [],
-    },
-    strengths: ["具体的です。"],
-    improvements: overrides.improvements ?? [],
+    unsafe: overrides.unsafe ?? [],
+    strengths: ["対象と根拠を明示しています。"],
   };
+}
+
+function rawStep(step, rubric, overrides = {}) {
+  return {
+    results: rubric.stepEntries.map((entry) => {
+      const status = overrides.statuses?.[`${step.id}:${entry.key}`] ?? "met";
+      return {
+        key: entry.key,
+        status,
+        evidence: status === "missing" ? "" : firstSentence(step),
+        reason: status === "met" ? "" : `${entry.label}が不足しています。`,
+      };
+    }),
+  };
+}
+
+function evaluate(targetRequest = request, overrides = {}) {
+  const rubric = resolveRubric(targetRequest);
+  const issues = analyzeStepText(targetRequest);
+  const plan = validatePlanEvaluation(rawPlan(targetRequest, rubric, overrides), targetRequest, rubric, issues);
+  const steps = targetRequest.steps.map((step, index) =>
+    validateStepEvaluation(rawStep(step, rubric, overrides), targetRequest, rubric, step.id, issues[index]));
+  return scoreEvaluation(targetRequest, rubric, steps, plan, "ollama", "test-model");
 }
 
 function criterion(result, id) {
   return result.criteria.find((item) => item.id === id);
 }
 
-function deduction(code, evidence, stepId = "report", missingItem = "") {
-  return { code, stepIds: [stepId], evidence, missingItem };
-}
+test("5種別と例題のルーブリックは各軸20点で、種別ごとに項目と工程が異なる", () => {
+  assert.equal(RUBRIC_VERSION, "2026-09-29.1");
+  for (const typeId of ["malware", "vulnerability", "logs", "incident-response", "other", "tutorial"]) {
+    const definition = rubricFor(typeId);
+    for (const axis of ["granularity", "context", "safety", "verifiability", "artifact"]) {
+      const total = definition.items.filter((item) => item.criterion === axis).reduce((sum, item) => sum + item.max, 0);
+      assert.equal(total, 20, `${typeId} ${axis}`);
+      assert.ok(definition.items.some((item) => item.criterion === axis && item.kind === "specific"), `${typeId} ${axis} specific`);
+    }
+    assert.ok(definition.phases.length >= 3, typeId);
+    assert.ok(definition.items.some((item) => item.id === "accuracy" && item.scope === "step"), typeId);
+  }
+  const safetyIds = (typeId) => rubricFor(typeId).items.filter((item) => item.criterion === "safety").map(({ id }) => id);
+  assert.notDeepEqual(safetyIds("malware"), safetyIds("logs"));
+  assert.match(rubricFor("malware").phases.map(({ label }) => label).join(), /静的観測/);
+  assert.match(rubricFor("incident-response").phases.map(({ label }) => label).join(), /証拠保全/);
+});
 
-function evaluate(request = defaultRequest, overrides = {}) {
-  return normalizeEvaluation(rawEvaluation(request, overrides), request, "ollama", "test-model");
-}
-
-test("100点の計画，合格条件，無意味な入力の上限を確認する", () => {
-  const perfect = evaluate(perfectMalwareRequest, {
-    actualArtifact: "観測事実，解釈，未確認事項，推奨する安全な追加確認，成功・失敗条件，証跡IDを含むMarkdown解析計画",
-  });
+test("全項目充足なら100点で、判定ごとの点数は整数（おおむね=満点−1、言及のみ=半分切り捨て）", () => {
+  const perfect = evaluate();
+  assert.deepEqual(perfect.criteria.map(({ score }) => score), [20, 20, 20, 20, 20]);
   assert.equal(perfect.total, 100);
   assert.equal(perfect.passed, true);
-  assert.deepEqual(perfect.gateFailures, []);
+  assert.equal(perfect.rubricType, "vulnerability");
+  assert.equal(perfect.rubricVersion, RUBRIC_VERSION);
+  const table = [2, 3, 4, 5, 6].map((max) => ["met", "mostly", "partial", "missing"].map((status) => statusPoints(max, status)));
+  assert.deepEqual(table, [[2, 1, 1, 0], [3, 2, 1, 0], [4, 3, 2, 0], [5, 4, 2, 0], [6, 5, 3, 0]]);
 
-  const passing = evaluate(defaultRequest, {
-    subscore: 4,
-    defects: [
-      deduction("missing_required_content", "緩和策", "report", "緩和策"),
-      deduction("missing_required_content", "優先度", "report", "優先度"),
-    ],
-  });
-  assert.equal(passing.total, 84);
-  assert.equal(passing.passed, true);
-
-  const lowStepRequest = {
-    ...defaultRequest,
-    steps: [
-      { id: "good", title: "ログを確認する", instruction: "ログを確認する", context: "入力ログ" },
-      { id: "empty", title: "", instruction: "", context: "" },
-    ],
-  };
-  const lowStep = evaluate(lowStepRequest, {
-  });
-  assert.equal(lowStep.total, 45);
-  assert.equal(lowStep.passed, false);
-  assert.match(lowStep.gateFailures.join(" "), /タスク2の分割粒度/);
-  assert.match(lowStep.gateFailures.join(" "), /タスク2のコンテキスト充足/);
-
-  const meaninglessRequest = {
-    ...defaultRequest,
-    steps: [{ ...defaultRequest.steps[0], instruction: "aaaaa", context: "TODO" }],
-  };
-  const meaningless = evaluate(meaninglessRequest);
-  assert.equal(criterion(meaningless, "granularity").score, 7);
-  assert.equal(criterion(meaningless, "context").score, 0);
-  assert.equal(meaningless.passed, false);
+  const mostly = evaluate(request, { statuses: { secrets: "mostly" } });
+  assert.equal(criterion(mostly, "safety").score, 19);
+  const partial = evaluate(request, { statuses: { secrets: "partial" } });
+  assert.equal(criterion(partial, "safety").score, 18);
+  const partialStop = evaluate(request, { statuses: { "out-of-scope-stop": "partial" } });
+  assert.equal(criterion(partialStop, "safety").score, 18);
+  assert.equal(partial.passed, true, "必須でない項目の不足は点数だけに反映する");
 });
 
-test("明白な誤字を減点し，不正な根拠を拒否する", () => {
-  const request = {
-    ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "根拠、優先度、緩和策、成功条件を報告書にまとめ、同じ証跡で再確認し、証跡不足時は判断を保留する。aaaaaa，隔離VMで変化を観測する。あああああ",
-    }],
-  };
-  const result = evaluate(request, {
-    obviousTypos: [[
-      { field: "instruction", evidence: "aaaaaa", reason: "意味のない文字反復" },
-      { field: "instruction", evidence: "あああああ", reason: "意味のない文字反復" },
-    ]],
-  });
-  assert.equal(criterion(result, "granularity").score, 15);
+test("中核項目の未充足は点数を上限で切らず、合格だけを止める", () => {
+  const result = evaluate(request, { statuses: { "authorized-scope": "missing" } });
+  assert.equal(criterion(result, "safety").score, 15);
   assert.equal(result.total, 95);
   assert.equal(result.passed, false);
-  assert.match(criterion(result, "granularity").stepDetails[0].message, /明白な誤字2件/);
+  assert.match(result.gateFailures.join(" "), /中核項目「許可範囲への限定」が未充足/);
 
-  assert.throws(
-    () => evaluate(defaultRequest, {
-      obviousTypos: [[{
-        field: "instruction",
-        evidence: "入力に存在しない誤字",
-        reason: "意味のない文字列",
-      }]],
-    }),
-    /obvious typo evidence not found/,
-  );
+  const phase = evaluate(request, { statuses: { "coverage:remediation": "missing" } });
+  assert.equal(criterion(phase, "granularity").score, 19);
+  assert.match(phase.gateFailures.join(" "), /必要な工程の網羅：緩和策と修正後の再確認/);
 });
 
-test("Safetyの加点と減点，重複除去，否定文除外を適用する", () => {
-  const missingControls = evaluate(defaultRequest, {
-    safetyControls: Object.fromEntries(
-      ["permission", "secrets", "scope", "environmentImpact"].map((id) => [id, { status: "missing" }]),
-    ),
-  });
-  assert.equal(criterion(missingControls, "safety").score, 0);
-
-  const duplicateRequest = {
-    ...defaultRequest,
-    steps: [
-      { ...defaultRequest.steps[0], instruction: "管理者権限で監査ログを読む" },
-      { id: "again", title: "再確認", instruction: "sudoを使って再確認する", context: "監査ログ" },
-    ],
-  };
-  const duplicate = evaluate(duplicateRequest, {
-    violations: [
-      deduction("privilege_escalation", "管理者権限で監査ログを読む"),
-      deduction("privilege_escalation", "sudoを使って再確認する", "again"),
-    ],
-  });
-  assert.equal(criterion(duplicate, "safety").score, 15);
-  assert.equal(duplicate.passed, false);
-
-  const detectedRequest = {
-    ...defaultRequest,
-    steps: [{ ...defaultRequest.steps[0], instruction: "管理者権限を用いて変化を観測する" }],
-  };
-  assert.equal(criterion(evaluate(detectedRequest), "safety").score, 15);
-
-  const negativeRequest = {
-    ...defaultRequest,
-    steps: [{ ...defaultRequest.steps[0], instruction: "管理者権限を使用しない手順を作る" }],
-  };
-  assert.equal(criterion(evaluate(negativeRequest), "safety").score, 20);
-
-  const preservationContext = "検体は隔離ラボの /lab/inbox に置かれています。コピーを解析用領域に作り、原本のハッシュと作業者・操作時刻を記録します。ハッシュだけで悪性とは断定せず、確認できた事実として扱ってください。機密情報はマスキングし，保存は検証環境内に限定して外部へ共有・送信しません。";
-  const unsupportedPrivilegeRequest = {
-    ...defaultRequest,
-    steps: [{
-      id: "preserve",
-      title: "検体と証拠を保全する",
-      instruction: "検体を読み取り専用で保全してください。",
-      context: preservationContext,
-    }],
-  };
-  const unsupportedPrivilege = evaluate(unsupportedPrivilegeRequest, {
-    violations: [deduction("privilege_escalation", preservationContext, "preserve")],
-  });
-  assert.equal(criterion(unsupportedPrivilege, "safety").score, 20);
-  assert.equal(criterion(unsupportedPrivilege, "safety").findings, undefined);
-
-  const secretRequest = {
-    ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "SSH秘密鍵の内容を読み取り、マスキングせず報告書へ保存する",
-    }],
-  };
-  const secrets = evaluate(secretRequest, {
-    violations: [
-      deduction("secret_content_access", "SSH秘密鍵の内容を読み取り"),
-      deduction("secret_unprotected_output", "マスキングせず報告書へ保存する"),
-    ],
-  });
-  assert.equal(criterion(secrets, "safety").score, 15);
-  assert.deepEqual(
-    criterion(secrets, "safety").findings.map((finding) => finding.points),
-    [5],
-  );
-  assert.equal(criterion(secrets, "safety").findings[0].stepReferences[0], "タスク1「報告書を作成する」");
-  assert.match(criterion(secrets, "safety").findings[0].evidence, /SSH秘密鍵/);
-  assert.match(secrets.improvements.join(" "), /安全性: 秘密情報の読み取り（タスク1）/);
-
-  const safeRequest = {
-    ...defaultRequest,
-    steps: [{ ...defaultRequest.steps[0], instruction: "機密情報はマスキングし、外部通信は発生させない" }],
-  };
-  const safe = evaluate(safeRequest, {
-    violations: [
-      deduction("secret_unprotected_output", "機密情報はマスキングし"),
-      deduction("unauthorized_target_access", "外部通信は発生させない"),
-    ],
-  });
-  assert.equal(criterion(safe, "safety").score, 20);
-
-  const mixedRequest = {
-    ...defaultRequest,
-    steps: [{ ...defaultRequest.steps[0], instruction: "識別子はマスキングし、APIキーは平文で保存する" }],
-  };
-  const mixed = evaluate(mixedRequest, {
-    violations: [
-      deduction("secret_unprotected_output", "識別子はマスキングし、APIキーは平文で保存する"),
-    ],
-  });
-  assert.equal(criterion(mixed, "safety").score, 15);
-});
-
-test("検体解析の3タスク計画は安全な否定文を減点せず，成果物不足で不合格にする", () => {
-  const request = {
-    scenario: {
-      title: "sample.exe の安全な解析方針",
-      description: "架空の検体を隔離したラボで調べ、静的情報と動作観測を結び付けます。",
-      goal: "外部に影響を与えず、観測事実・推測・次の確認事項を分けた解析計画を作る。",
-      environment: "ネットワーク遮断済みの使い捨て仮想マシン。検体は架空の sample.exe、権限は最小限、スナップショットを取得済み。",
-    },
-    steps: [
-      {
-        id: "malware-preserve",
-        title: "検体と証拠を保全する",
-        instruction: "sample.exe の情報を読み取り専用で記録してください。",
-        context: "検体は /lab/inbox に置かれています。コピーを解析用領域に作り記録します。機密情報はマスクしてください．",
-      },
-      {
-        id: "malware-static",
-        title: "静的解析の観点を整理する",
-        instruction: "実行せずに確認できる情報を列挙し、各観測から言える範囲を明記してください。",
-        context: "解析端末は外部通信を遮断し、管理者権限を使えません。機密情報はマスクしてください．",
-      },
-      {
-        id: "malware-dynamic",
-        title: "動的観測を最小リスクで設計する",
-        instruction: "スナップショットから復元できるテスト VM で、プロセス・ファイル・レジストリ相当の変化を観測する手順を作ってください．",
-        context: "動的解析は無害なダミーデータだけを使い、通信は遮断されたモック層で記録します。機密情報はマスクしてください．",
-      },
-    ],
-  };
-  const result = evaluate(request, {
-    safetyControls: {
-      permission: { status: "satisfied", evidence: request.scenario.environment },
-      secrets: { status: "satisfied", evidence: request.steps[0].context },
-      scope: { status: "satisfied", evidence: request.scenario.environment },
-      environmentImpact: { status: "satisfied", evidence: request.scenario.environment },
-    },
-    violations: [
-      deduction(
-        "privilege_escalation",
-        "解析端末は外部通信を遮断し、管理者権限を使えません。機密情報はマスクしてください．",
-        "malware-static",
-      ),
-      deduction(
-        "unauthorized_target_access",
-        "解析端末は外部通信を遮断し、管理者権限を使えません。機密情報はマスクしてください．",
-        "malware-static",
-      ),
-      deduction(
-        "secret_unprotected_output",
-        "機密情報はマスクしてください．",
-        "malware-preserve",
-      ),
-    ],
-    actualArtifact: "個別の保全手順、静的解析項目、動的観測手順",
-    defects: [],
-  });
-
-  assert.equal(criterion(result, "safety").score, 14);
-  assert.equal(criterion(result, "granularity").score, 17);
-  assert.equal(criterion(result, "context").score, 15);
-  assert.equal(criterion(result, "verifiability").score, 5);
-  assert.equal(criterion(result, "artifact").score, 0);
-  assert.equal(result.total, 51);
-  assert.deepEqual(
-    result.criteria.map((item) => item.subcriteria.map((subcriterion) => subcriterion.label)),
-    [
-      ["単一性", "大きさ", "タスク数", "順序"],
-      ["対象", "入力資料", "前提・制約", "前段の結果"],
-      ["権限", "機密情報", "対象範囲", "環境への影響"],
-      ["判定条件", "判定の根拠", "再確認", "判断保留"],
-      ["目的との整合", "必要な内容", "結果の引き継ぎ"],
-    ],
-  );
+test("各タスクの分割粒度とコンテキスト充足は20点換算で12点以上が必要", () => {
+  const result = evaluate(request, { statuses: {
+    "report:purpose": "partial",
+    "report:size": "partial",
+    "report:handoff": "partial",
+  } });
+  const granularity = criterion(result, "granularity");
+  const weakStep = granularity.stepDetails.find((detail) => detail.stepId === "report");
+  assert.equal(weakStep.max, 20);
+  assert.equal(weakStep.score, 9, "6/13を20点換算して切り捨て");
+  assert.equal(granularity.score, 16, "4+3+floor(7/2)+floor(6/2)+floor(6/2)");
+  assert.ok(result.criteria.every(({ score }) => Number.isInteger(score)));
+  const purpose = granularity.findings.find(({ code }) => code === "purpose");
+  assert.equal(purpose.points, 2);
+  assert.deepEqual(purpose.stepReferences, ["タスク2「根拠付き報告書を作る」：言及のみ"]);
+  assert.ok(result.total >= 80);
   assert.equal(result.passed, false);
-  assert.match(result.gateFailures.join(" "), /最終成果物が指定されていない/);
+  assert.match(result.gateFailures.join(" "), /タスク2の分割粒度が12点未満/);
 });
 
-test("Artifactの固定減点，重複除去，合格下限を適用する", () => {
-  const request = {
-    ...defaultRequest,
-    scenario: {
-      ...defaultRequest.scenario,
-      goal: "安全担当者が根拠、優先度、緩和策を判断できる報告書を作る",
-    },
-  };
-  const required = ["根拠", "優先度", "緩和策"];
-  for (const [count, expectedScore] of [[1, 18], [2, 16], [3, 14], [4, 14]]) {
-    const defects = Array.from({ length: count }, (_, index) =>
-      deduction(
-        "missing_required_content",
-        required[index % required.length],
-        "report",
-        required[index % required.length],
-      ));
-    assert.equal(
-      criterion(evaluate(request, { actualArtifact: "Markdown報告書", defects }), "artifact").score,
-      expectedScore,
-    );
-  }
-
-  const duplicate = evaluate(defaultRequest, {
-    defects: [
-      deduction("missing_required_content", "緩和策", "report", "緩和策"),
-      deduction("missing_required_content", "緩和策", "report", "緩和策（優先順位を含む）"),
-    ],
-  });
-  assert.equal(criterion(duplicate, "artifact").score, 18);
-
-  const ignored = evaluate(defaultRequest, {
-    actualArtifact: "根拠と優先度を含むMarkdown報告書",
-    defects: [
-      deduction("missing_required_content", "緩和策", "report", "静的解析結果"),
-      deduction("missing_required_content", "優先度", "report", "優先度"),
-    ],
-  });
-  assert.equal(criterion(ignored, "artifact").score, 20);
-
-  const noArtifact = evaluate(defaultRequest, {
-    actualArtifact: "最終成果物の指定なし",
-    defects: [
-      deduction("no_final_artifact", "監査ログ"),
-      deduction("missing_required_content", "緩和策", "report", "緩和策"),
-    ],
-  });
-  assert.equal(criterion(noArtifact, "artifact").score, 0);
-  assert.equal(criterion(noArtifact, "artifact").findings.length, 1);
-  assert.equal(criterion(noArtifact, "artifact").findings[0].evidence, "監査ログ");
-  assert.match(criterion(noArtifact, "artifact").findings[0].guidance, /最終成果物/);
-  assert.match(noArtifact.gateFailures.join(" "), /最終成果物が指定されていない/);
-
-  const mismatchRequest = {
-    ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "作業時刻だけのCSV日誌を作る",
+test("どの工程にも当たらない・重複するタスクは1つにつき網羅を1点下げる", () => {
+  const padded = {
+    ...request,
+    steps: [...request.steps, {
+      id: "extra",
+      title: "ハッシュを記録する",
+      instruction: "監査ログのハッシュを記録する。",
+      context: "入力は監査ログです。",
     }],
   };
-  const mismatch = evaluate(mismatchRequest, {
-    actualArtifact: "作業時刻だけのCSV日誌",
-    defects: [deduction("goal_mismatch", "作業時刻だけのCSV日誌を作る")],
-  });
-  assert.equal(criterion(mismatch, "artifact").score, 10);
-  assert.match(mismatch.gateFailures.join(" "), /演習目的と一致しない/);
+  const result = evaluate(padded, { roles: { extra: "none" } });
+  const granularity = criterion(result, "granularity");
+  assert.equal(granularity.subcriteria.find(({ id }) => id === "coverage").score, 3);
+  assert.ok(granularity.findings.some((finding) => finding.code === "padding" && /タスク3/.test(finding.stepReferences.join())));
 
-  const thresholdRequest = {
-    ...defaultRequest,
-    scenario: {
-      ...defaultRequest.scenario,
-      goal: "安全担当者が優先度と緩和策を判断できる報告書を作る",
-    },
+  const redundant = evaluate(padded, { redundant: ["extra"] });
+  assert.equal(criterion(redundant, "granularity").subcriteria.find(({ id }) => id === "coverage").score, 3);
+  const twoPadding = evaluate(padded, { roles: { extra: "none" }, redundant: ["report"] });
+  assert.equal(criterion(twoPadding, "granularity").subcriteria.find(({ id }) => id === "coverage").score, 2);
+});
+
+test("禁止操作の明示的な指示だけ総合を29点に制限し、否定文は除外する", () => {
+  const unsafe = evaluate(request, { unsafe: [{ stepId: "scope", evidence: firstSentence(request.steps[0]), reason: "範囲外の操作" }] });
+  assert.equal(unsafe.total, 29);
+  assert.equal(unsafe.deductions.length, 1);
+  assert.equal(unsafe.deductions[0].cap, 29);
+  assert.match(unsafe.improvements[0], /禁止操作/);
+
+  const negatedRequest = {
+    ...request,
+    steps: [{ ...request.steps[0], instruction: "本番環境へ接続しない。" }, request.steps[1]],
+  };
+  const negated = evaluate(negatedRequest, { unsafe: [{ stepId: "scope", evidence: "本番環境へ接続しない。", reason: "接続" }] });
+  assert.equal(negated.deductions.length, 0);
+  assert.equal(negated.total, 100);
+});
+
+test("無意味な入力はLLMの判定にかかわらず未充足にし、混ざった無意味な語と識別子の誤りは記述の正確さで扱う", () => {
+  const noiseRequest = {
+    ...request,
+    steps: [{ ...request.steps[0], instruction: "aaaaaa asdf", context: "TODO" }, request.steps[1]],
+  };
+  const rubric = resolveRubric(noiseRequest);
+  const issues = analyzeStepText(noiseRequest);
+  assert.equal(issues[0].empty, true);
+  const raw = rawStep(noiseRequest.steps[0], rubric);
+  raw.results = raw.results.map((item) => ({ ...item, evidence: "aaaaaa asdf" }));
+  const results = validateStepEvaluation(raw, noiseRequest, rubric, "scope", issues[0]);
+  assert.ok(results.every((result) => result.status === "missing"));
+
+  const fragment = analyzeStepText({ ...request, steps: [{ ...request.steps[0], context: "入力は監査ログですああああ。" }] });
+  assert.equal(fragment[0].empty, false);
+  assert.deepEqual(fragment[0].noiseFragments, ["ああああ"]);
+  const fragmentRequest = { ...request, steps: [{ ...request.steps[0], context: "入力は監査ログですああああ。" }, request.steps[1]] };
+  const fragmentResult = evaluate(fragmentRequest);
+  const accuracy = criterion(fragmentResult, "context").stepDetails[0].subcriteria.find(({ id }) => id === "accuracy");
+  assert.equal(accuracy.status, "partial");
+
+  const identifiers = analyzeStepText({
+    ...request,
+    scenario: { ...request.scenario, environment: "隔離VMに sample.exe を配置済み" },
     steps: [
-      defaultRequest.steps[0],
-      { id: "review", title: "報告書を確認する", instruction: "Markdown報告書を確認する", context: "監査ログ" },
-    ],
-  };
-  const score12 = evaluate(thresholdRequest, {
-    actualArtifact: "Markdown報告書",
-    defects: [
-      deduction("missing_required_content", "優先度", "report", "優先度"),
-      deduction("missing_required_content", "緩和策", "report", "緩和策"),
-      deduction("missing_handoff", "報告書"),
+      { ...request.steps[0], instruction: "前段の一覧から sampel.exe のハッシュを確認する。" },
+      { ...request.steps[1], instruction: "タスク5の結果を報告する。" },
     ],
   });
-  assert.equal(criterion(score12, "artifact").score, 12);
-  assert.equal(score12.passed, true);
+  assert.match(identifiers[0].identifierIssues.join(), /存在しない前段/);
+  assert.match(identifiers[0].identifierIssues.join(), /sampel\.exe.*sample\.exe/);
+  assert.match(identifiers[1].identifierIssues.join(), /タスク5/);
 });
 
-test("失点への影響が大きい改善点を具体的な上位3件に絞る", () => {
-  const request = {
-    ...defaultRequest,
-    steps: [{
-      ...defaultRequest.steps[0],
-      instruction: "APIキーを平文で外部ホストへ送信する",
-      context: "監査ログを入力とし、成功条件を記録して同じ証跡で再確認し、証跡不足時は判断を保留する",
-    }],
-  };
-  const result = evaluate(request, {
-    subscore: 4,
-    violations: [
-      deduction("secret_unprotected_output", "APIキーを平文で外部ホストへ送信する"),
-      deduction("unauthorized_target_access", "外部ホストへ送信する"),
-    ],
-    improvements: ["計画をもう少し具体的にしてください。"],
+test("自作問題は分野のルーブリックと、利用者の評価観点・工程リストで判定する", () => {
+  const custom = (domain, profile = {}) => resolveRubric({
+    ...request,
+    scenario: {
+      ...request.scenario,
+      rubricScenarioId: "custom",
+      evaluationProfile: {
+        domain,
+        focus: { granularity: "受付票ごとに分ける。", context: "", safety: "", verifiability: "", artifact: "" },
+        incidentIds: [],
+        references: [],
+        ...profile,
+      },
+    },
   });
+  const logs = custom("logs");
+  assert.equal(logs.typeId, "logs");
+  assert.match(logs.planEntries.find(({ key }) => key === "specific-granularity").description, /受付票ごとに分ける/);
+  assert.match(logs.planEntries.find(({ key }) => key === "specific-context").description, /タイムゾーン/, "空欄は分野の既定観点");
+  assert.ok(logs.planEntries.some(({ key }) => key === "coverage:timeline"));
 
-  assert.equal(result.improvements.length, 3);
-  assert.match(result.improvements[0], /安全性: 秘密情報の無保護出力（タスク1）/);
-  assert.match(result.improvements[1], /安全性: 未許可環境へのアクセス（タスク1）/);
-  assert.match(result.improvements[2], /主要な作業を1つに分割（タスク1）/);
-  assert.doesNotMatch(result.improvements.join(" "), /もう少し具体的/);
+  const other = custom("other", { phases: ["受付", "分類", "回答"] });
+  assert.deepEqual(other.phases.map(({ label }) => label), ["受付", "分類", "回答"]);
+  assert.equal(custom("other").phases.length, 4);
+
+  const standard = resolveRubric({ ...request, scenario: { ...request.scenario, rubricScenarioId: "logs" } });
+  assert.match(standard.specificCriteria.granularity, /匿名化識別子ごと/);
 });
 
-test("LLMが返した根拠と必須内容を検証する", () => {
-  assert.throws(
-    () => evaluate(defaultRequest, {
-      violations: [deduction("privilege_escalation", "入力には存在しない管理者権限を使用する指示")],
-    }),
-    /evidence not found/,
-  );
-  assert.throws(
-    () => evaluate(defaultRequest, {
-      defects: [deduction("missing_required_content", "緩和策")],
-    }),
-    /missing artifact defect missingItem/,
-  );
+test("判定の欠落と入力にない根拠を拒否する", () => {
+  const rubric = resolveRubric(request);
+  const issues = analyzeStepText(request);
+  const missing = rawStep(request.steps[0], rubric);
+  missing.results.pop();
+  assert.throws(() => validateStepEvaluation(missing, request, rubric, "scope", issues[0]), /missing task scope result/);
+
+  const fabricated = rawPlan(request, rubric);
+  fabricated.results[0].evidence = "存在しない根拠。";
+  assert.throws(() => validatePlanEvaluation(fabricated, request, rubric, issues), /evidence not found/);
+
+  const invalidRole = rawPlan(request, rubric);
+  invalidRole.taskRoles[0].stepId = "unknown";
+  assert.throws(() => validatePlanEvaluation(invalidRole, request, rubric, issues), /invalid stepId/);
+});
+
+test("根拠の候補はファイル名の途中で文を区切らず、理由が空なら項目名を重複させない", () => {
+  assert.deepEqual(sentenceOptions(["sample.exe のハッシュを記録する。次に報告する。"]),
+    ["sample.exe のハッシュを記録する。", "次に報告する。"]);
+
+  const rubric = resolveRubric(request);
+  const issues = analyzeStepText(request);
+  const raw = rawPlan(request, rubric, { statuses: { secrets: "partial" } });
+  raw.results.find(({ key }) => key === "secrets").reason = "";
+  const plan = validatePlanEvaluation(raw, request, rubric, issues);
+  const steps = request.steps.map((step, index) => validateStepEvaluation(rawStep(step, rubric), request, rubric, step.id, issues[index]));
+  const result = scoreEvaluation(request, rubric, steps, plan, "ollama", "test-model");
+  assert.ok(result.improvements.some((message) => message.startsWith("認証情報と秘密値の扱い：見つけた秘密値")));
+
+  const phase = evaluate(request, { statuses: { "coverage:remediation": "missing", "coverage:impact": "partial" } });
+  const coverage = criterion(phase, "granularity").findings.find(({ code }) => code === "coverage");
+  assert.equal(coverage.points, 2, "floor((4+4+2+0)/4)=2");
+  assert.match(coverage.guidance, /緩和策と修正後の再確認（未充足）/);
 });

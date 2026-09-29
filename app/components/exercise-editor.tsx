@@ -3,8 +3,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CRITERION_SPECS } from "../lib/evaluator";
 import {
-  defaultEvaluationFocus, EXERCISE_DOMAINS, newCustomExerciseInput,
-  parseCustomExerciseInput, parseEvaluationFocus,
+  defaultEvaluationFocus, EXERCISE_DOMAINS, MAX_EVALUATION_PHASES, newCustomExerciseInput,
+  parseCustomExerciseInput, parseEvaluationFocus, parseEvaluationPhases,
   type CustomExerciseInput, type CustomScenario, type ExerciseDomain,
 } from "../lib/exercises";
 import { INCIDENT_REFERENCES } from "../lib/incidents";
@@ -69,7 +69,11 @@ export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
       if (controller.signal.aborted) return;
       if (!response.ok) throw new Error(payload.error || "評価観点を取得できませんでした。");
       const focus = parseEvaluationFocus(payload.focus);
-      setInput((current) => ({ ...current, evaluationProfile: { ...current.evaluationProfile, focus } }));
+      const phases = parseEvaluationPhases(payload.phases);
+      setInput((current) => ({
+        ...current,
+        evaluationProfile: { ...current.evaluationProfile, focus, ...(current.evaluationProfile.domain === "other" && phases.length > 0 ? { phases } : {}) },
+      }));
       setSuggestionMessage("提案を反映しました。各観点を確認・編集してから保存してください。");
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -151,6 +155,10 @@ export function ExerciseEditor({ scenario, onSave, onDelete, onClose }: Props) {
           }}>分野の標準観点に戻す</button>
         </div>
         <p className="exercise-help">提案時には問題文・入力資料・参照情報を設定済みのLLMへ送信します。手入力だけでも保存できます。</p>
+        {input.evaluationProfile.domain === "other" && <div className="field"><label htmlFor="focus-phases">必要な工程（1行に1つ・最大{MAX_EVALUATION_PHASES}件）</label><textarea id="focus-phases" rows={4} value={(input.evaluationProfile.phases ?? []).join("\n")} onChange={(event) => {
+          const phases = event.target.value.split("\n").slice(0, MAX_EVALUATION_PHASES);
+          setInput((current) => ({ ...current, evaluationProfile: { ...current.evaluationProfile, phases } }));
+        }} /><p className="exercise-help">分割粒度の「必要な工程の網羅」の判定に使います。空欄なら汎用の工程（前提確認・主作業・検証・報告）で判定します。</p></div>}
         {CRITERION_SPECS.map(({ id, label }) => <div className="field" key={id}><label htmlFor={`focus-${id}`}>{label} · 20点</label><textarea id={`focus-${id}`} maxLength={600} value={input.evaluationProfile.focus[id]} onChange={(event) => {
           const value = event.target.value;
           setInput((current) => ({ ...current, evaluationProfile: { ...current.evaluationProfile, focus: { ...current.evaluationProfile.focus, [id]: value } } }));

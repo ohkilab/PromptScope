@@ -15,6 +15,7 @@ import { ExerciseEditor } from "./components/exercise-editor";
 import { EvaluationProfileDetails } from "./components/evaluation-profile";
 import { createCustomScenario, type CustomExerciseInput, type CustomScenario } from "./lib/exercises";
 import { loadCustomExercises, MAX_CUSTOM_EXERCISES, saveCustomExercises } from "./lib/exercise-storage";
+import { STATUS_LABELS } from "./lib/rubric";
 
 type PlanEvaluation = EvaluationResult;
 
@@ -424,6 +425,11 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scenario: {
+            rubricScenarioId: activeScenario.id === "tutorial"
+              ? "tutorial"
+              : activeScenario.id === "malware" || activeScenario.id === "vulnerability" || activeScenario.id === "logs"
+                ? activeScenario.id
+                : "custom",
             title: activeScenario.title,
             description: activeScenario.description,
             goal: activeScenario.goal,
@@ -823,6 +829,7 @@ export default function Home() {
                     ? "安全な分析の骨格ができています。"
                     : "採点結果をもとに計画を改善できます。"}
             </p>
+            <p className="score-rules">合格条件：80点以上・必須項目すべて充足・各軸12点以上</p>
           </div>
 
           <div className="criteria-block">
@@ -856,7 +863,7 @@ export default function Home() {
                           <li key={`${criterion.id}-${subcriterion.id}`}>
                             <div>
                               <strong>{subcriterion.label}</strong>
-                              <span>{subcriterion.score}<small>/{subcriterion.max}</small></span>
+                              <span>{subcriterion.score}<small>/{subcriterion.max}</small>{subcriterion.status && <small>{STATUS_LABELS[subcriterion.status]}</small>}</span>
                             </div>
                             <p>{subcriterion.message}</p>
                           </li>
@@ -874,7 +881,6 @@ export default function Home() {
                             {finding.stepReferences.length > 0 && (
                               <p className="criterion-finding-location">{finding.stepReferences.join("・")}</p>
                             )}
-                            <p className="criterion-finding-evidence">該当箇所「{finding.evidence}」</p>
                             <p>{finding.guidance}</p>
                           </li>
                         ))}
@@ -919,6 +925,24 @@ export default function Home() {
               <span className="mono-label">次の改善点</span>
               <span className="feedback-mark" aria-hidden="true">↗</span>
             </div>
+            {scoredEvaluation && scoredEvaluation.deductions.length > 0 && (
+              <div className="deduction-block">
+                <span className="mono-label">減点・上限</span>
+                <ul className="criterion-findings">
+                  {scoredEvaluation.deductions.map((deduction, index) => (
+                    <li key={`${deduction.id}-${index}`}>
+                      <div className="criterion-finding-heading">
+                        <strong>{deduction.label}</strong>
+                        <span>総合 上限{deduction.cap}点</span>
+                      </div>
+                      <p className="criterion-finding-location">{deduction.stepReferences.join("・")}</p>
+                      <p className="criterion-finding-evidence">{deduction.evidence.map((evidence) => `「${evidence}」`).join(" / ")}</p>
+                      <p>{deduction.reason}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <ul className="feedback-list">
               {!scoredEvaluation ? (
                 <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
