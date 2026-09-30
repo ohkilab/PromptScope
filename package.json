@@ -10,6 +10,9 @@
     "build": "vinext build",
     "start": "vinext start",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
+    "test:live": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-strip-types --test tests/live/servers.test.mjs",
+    "test:samples": "node --env-file-if-exists=.env --env-file-if-exists=.env.local --experimental-strip-types --test --test-concurrency=1 tests/live/score-samples.test.mjs",
+    "score:samples": "node --env-file-if-exists=.env --env-file-if-exists=.env.local scripts/score-samples.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
@@ -35,6 +38,7 @@
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
+    "tsx": "4.22.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",

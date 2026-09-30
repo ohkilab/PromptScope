@@ -8,20 +8,10 @@ async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
-
   return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
+    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    { waitUntil() {}, passThroughOnException() {} },
   );
 }
 
@@ -36,16 +26,14 @@ async function readSource(relativePath) {
   return readFile(new URL(relativePath, projectRoot), "utf8");
 }
 
-test("renders the PromptScope trainer as Japanese HTML at GET /", async () => {
+test("トップ画面を日本語の案内画面として表示する", async () => {
   const response = await render();
-
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
   assert.match(html, htmlAttribute("html", "lang", "ja"));
   assert.match(html, /<title>PromptScope\b[^<]*<\/title>/i);
-
   for (const phrase of [
     "PromptScope",
     "安全な分析は",
@@ -56,42 +44,30 @@ test("renders the PromptScope trainer as Japanese HTML at GET /", async () => {
   ]) {
     assert.match(html, new RegExp(phrase));
   }
-});
-
-test("opens with an introduction before displaying exercise questions", async () => {
-  const html = await (await render()).text();
-
   assert.match(html, /id="welcome-title"/);
-  assert.doesNotMatch(html, /id="workspace-title"/);
-  assert.doesNotMatch(html, /<textarea\b/);
+  assert.doesNotMatch(html, /id="workspace-title"|<textarea\b|codex-preview|Your site is taking shape|react-loading-skeleton/i);
+
+  const layout = await readSource("app/layout.tsx");
+  assert.match(
+    layout,
+    /export\s+(?:const\s+metadata\s*:\s*Metadata|async\s+function\s+generateMetadata)/,
+  );
+  assert.match(layout, /(?:title:\s*|const\s+title\s*=\s*)["']PromptScope\b/);
+  assert.match(layout, /<html\s+lang=["']ja["']/);
 });
 
-test("does not render the starter loading-preview shell", async () => {
-  const html = await (await render()).text();
-
-  assert.doesNotMatch(html, /codex-preview/i);
-  assert.doesNotMatch(html, /Your site is taking shape/);
-  assert.doesNotMatch(html, /react-loading-skeleton/i);
-});
-
-test("wires the page to curriculum, LLM evaluation, and the three core actions", async () => {
+test("画面操作と安全な演習シナリオを定義する", async () => {
   const page = await readSource("app/page.tsx");
-
   assert.match(page, /from ["']\.\/lib\/evaluator["']/);
   assert.match(page, /from ["']\.\/lib\/curriculum["']/);
-
   for (const action of ["switchScenario", "addStep", "completeLearning"]) {
     assert.match(page, new RegExp(`function\\s+${action}\\s*\\(`));
   }
-});
 
-test("includes three safe, fictional curriculum scenarios", async () => {
   const curriculum = await readSource("app/lib/curriculum.ts");
-
   for (const scenarioId of ["malware", "vulnerability", "logs"]) {
     assert.match(curriculum, new RegExp(`\\b${scenarioId}\\b`));
   }
-
   for (const safetyPattern of [
     /隔離/,
     /最小権限|権限は最小限/,
@@ -104,35 +80,37 @@ test("includes three safe, fictional curriculum scenarios", async () => {
   }
 });
 
-test("defines five LLM evaluation axes and provider safeguards", async () => {
+test("5つの評価項目とLLM利用時の安全策を定義する", async () => {
   const evaluator = await readSource("app/lib/evaluator.ts");
+  const rubric = await readSource("app/lib/rubric.ts");
   const llmServer = await readSource("app/lib/llm/server.ts");
 
   assert.match(evaluator, /const\s+CRITERION_SPECS\s*=/);
-  for (const criterionId of [
-    "granularity",
-    "context",
-    "safety",
-    "verifiability",
-    "artifact",
-  ]) {
+  for (const criterionId of ["granularity", "context", "safety", "verifiability", "artifact"]) {
     assert.match(evaluator, new RegExp(`\\b${criterionId}\\b`));
   }
-
-  assert.match(llmServer, /\/api\/chat/);
-  assert.match(llmServer, /openrouter\.ai\/api\/v1\/chat\/completions/);
-  assert.match(llmServer, /response_format/);
-  assert.match(llmServer, /破壊的変更はしない/);
-  assert.match(llmServer, /意味のない文字列/);
-});
-
-test("publishes PromptScope metadata with the Japanese document language", async () => {
-  const layout = await readSource("app/layout.tsx");
-
-  assert.match(
-    layout,
-    /export\s+(?:const\s+metadata\s*:\s*Metadata|async\s+function\s+generateMetadata)/,
-  );
-  assert.match(layout, /(?:title:\s*|const\s+title\s*=\s*)["']PromptScope\b/);
-  assert.match(layout, /<html\s+lang=["']ja["']/);
+  for (const pattern of [
+    /\/api\/generate/,
+    /openrouter\.ai\/api\/v1\/chat\/completions/,
+    /response_format/,
+    /statusの基準/,
+    /判定項目/,
+    /taskRoles/,
+    /EVALUATION_CONCURRENCY/,
+    /rubricScenarioId/,
+  ]) {
+    assert.match(llmServer, pattern);
+  }
+  for (const pattern of [
+    /statusPoints/,
+    /AXIS_MINIMUM/,
+    /STEP_AXIS_MINIMUM/,
+    /UNSAFE_CAP/,
+    /RUBRIC_VERSION/,
+  ]) {
+    assert.match(evaluator, pattern);
+  }
+  for (const typeId of ["malware", "vulnerability", "logs", "incident-response", "other", "tutorial"]) {
+    assert.match(rubric, new RegExp(`\\b${typeId}\\b`));
+  }
 });

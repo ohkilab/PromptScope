@@ -15,6 +15,7 @@ import { ExerciseEditor } from "./components/exercise-editor";
 import { EvaluationProfileDetails } from "./components/evaluation-profile";
 import { createCustomScenario, type CustomExerciseInput, type CustomScenario } from "./lib/exercises";
 import { loadCustomExercises, MAX_CUSTOM_EXERCISES, saveCustomExercises } from "./lib/exercise-storage";
+import { STATUS_LABELS } from "./lib/rubric";
 
 type PlanEvaluation = EvaluationResult;
 
@@ -97,6 +98,39 @@ function scoreTone(score: number) {
   return "low";
 }
 
+function FeedbackMessage({ message }: { message: string }) {
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [isLong, setIsLong] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    const measure = measureRef.current;
+    if (!measure) return;
+
+    const updateLength = () => {
+      const lineHeight = parseFloat(getComputedStyle(measure).lineHeight);
+      setIsLong(measure.getBoundingClientRect().height > lineHeight * 3 + 1);
+    };
+
+    updateLength();
+    const observer = new ResizeObserver(updateLength);
+    observer.observe(measure);
+    return () => observer.disconnect();
+  }, [message]);
+
+  return (
+    <span className="feedback-message">
+      <span className={expanded ? "feedback-message-text" : "feedback-message-text is-collapsed"}>{message}</span>
+      <span className="feedback-message-measure" ref={measureRef} aria-hidden="true">{message}</span>
+      {isLong && (
+        <button className="feedback-message-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          {expanded ? "閉じる" : "…続きを読む"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 export default function Home() {
   const [view, setView] = useState<"welcome" | "tutorial" | "exercise">("welcome");
   const [tutorialIndex, setTutorialIndex] = useState(0);
@@ -116,12 +150,12 @@ export default function Home() {
     setTutorialDraft(createScenarioDraft(TUTORIAL_SCENARIO));
     setTutorialIndex(0);
     setView("tutorial");
-    setLiveMessage("専用の例題で使い方を練習します．演習の回答は保持されています．");
+    setLiveMessage("専用の例題で使い方を練習します。演習の回答は保持されています。");
   }
 
   function openExercise() {
     setView("exercise");
-    setLiveMessage("演習の回答を編集できます．使い方はいつでも開き直せます．");
+    setLiveMessage("演習の回答を編集できます。使い方はいつでも開き直せます。");
   }
 
   function guide(id: TutorialStepId) {
@@ -134,11 +168,11 @@ export default function Home() {
       nextDisabled={id === "score" && (!scoredEvaluation || hasUnscoredChanges || isEvaluating)}
       onSkip={id === "score" ? () => {
         setTutorialIndex((current) => current + 1);
-        setLiveMessage("LLM採点をスキップしました．採点環境が準備できたら，通常の演習で試せます．");
+        setLiveMessage("LLM採点をスキップしました。採点環境が準備できたら、通常の演習で試せます。");
       } : undefined}
       onExample={id === "instruction" || id === "context" ? () => {
         if (steps[0]) updateStep(steps[0].id, id, TUTORIAL_ANSWER[id]);
-        setLiveMessage("回答例を入力しました．内容を確認し，自由に書き換えてみましょう．");
+        setLiveMessage("回答例を入力しました。内容を確認し、自由に書き換えてみましょう。");
       } : undefined}
     />;
   }
@@ -227,7 +261,10 @@ export default function Home() {
 
   const displayedScore = scoredEvaluation ? Math.round(scoredEvaluation.total) : null;
   const displayedCriteria = scoredEvaluation?.criteria ?? [];
-  const displayedPassed = displayedScore !== null && displayedScore >= 80;
+  const displayedPassed = scoredEvaluation?.passed ?? false;
+  const displayedFeedback = scoredEvaluation
+    ? scoredEvaluation.improvements.slice(0, 3)
+    : [];
   const scoreStatus = isEvaluating
     ? "LLMで採点中"
     : !scoredEvaluation
@@ -237,13 +274,9 @@ export default function Home() {
       : displayedPassed
         ? "目標達成"
         : "改善中";
-  const summaryTone = displayedScore === null ? "unscored" : scoreTone(displayedScore);
-  const evaluationSource = scoredEvaluation?.provider === "openrouter"
-    ? "OPENROUTER"
-    : scoredEvaluation?.provider === "ollama"
-      ? "OLLAMA"
-      : "LLM";
-
+  const summaryTone = displayedScore === null
+    ? "unscored"
+    : scoreTone(displayedPassed ? displayedScore : Math.min(displayedScore, 79));
   function updateActiveDraft(
     update: (current: ScenarioDraftState) => ScenarioDraftState,
   ) {
@@ -419,6 +452,11 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           scenario: {
+            rubricScenarioId: activeScenario.id === "tutorial"
+              ? "tutorial"
+              : activeScenario.id === "malware" || activeScenario.id === "vulnerability" || activeScenario.id === "logs"
+                ? activeScenario.id
+                : "custom",
             title: activeScenario.title,
             description: activeScenario.description,
             goal: activeScenario.goal,
@@ -437,7 +475,7 @@ export default function Home() {
       }
 
       const nextScore = Math.round(payload.total);
-      const nextPassed = nextScore >= 80;
+      const nextPassed = payload.passed;
       updateActiveDraft((current) => ({
         ...current,
         scoredEvaluation: payload,
@@ -445,7 +483,7 @@ export default function Home() {
         completionState: "idle",
       }));
       setLiveMessage(
-        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格ラインを超えています。" : "80点まで改善の余地があります。"}`,
+        `計画を採点しました。総合スコアは ${nextScore} 点です。${nextPassed ? "合格条件を満たしています。" : nextScore < 80 ? "80点まで改善の余地があります。" : "タスク別の合格条件を確認してください。"}`,
       );
       if (isTutorial && tutorialStep === "score") setTutorialIndex((current) => current + 1);
     } catch (error) {
@@ -478,8 +516,9 @@ export default function Home() {
         ...current,
         completionState: "needs-work",
       }));
-      setLiveMessage(
-        `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`,
+      setLiveMessage(displayedScore < 80
+        ? `まだ学習途中です。合格点の80点まで、${80 - displayedScore}点分の改善を試してみましょう。`
+        : scoredEvaluation.gateFailures[0] ?? "タスク別の合格条件を確認してください。",
       );
     }
   }
@@ -503,12 +542,6 @@ export default function Home() {
           <span className="brand-name">PromptScope</span>
           <span className="brand-tagline">安全な分析は、よい分解から。</span>
         </div>
-        <div className="topbar-meta">
-          <span className="local-indicator" aria-hidden="true" />
-          <span>学習モード</span>
-          <span className="slash" aria-hidden="true">/</span>
-          <span className="mono-label">LLMによる採点支援</span>
-        </div>
       </header>
 
       <div className="learning-toolbar">
@@ -516,7 +549,7 @@ export default function Home() {
           <div><span className="mono-label accent-label">例題ガイド</span><strong>専用の例題で練習中</strong><span>{tutorialIndex + 1} / {TUTORIAL_STEPS.length}</span></div>
           <button className="button button-complete" type="button" onClick={openExercise}>ガイドを終了して演習へ</button>
         </> : <>
-          <span>目的を読み，タスクと指示を組み立てましょう．</span>
+          <span>目的を読み、タスクと指示を組み立てましょう。</span>
           <button className="button button-complete" type="button" onClick={startTutorial}>使い方・例題を見る</button>
         </>}
       </div>
@@ -524,9 +557,8 @@ export default function Home() {
       <div className="workspace-grid">
         <aside className="left-column" aria-label="演習選択と学習の焦点">
           <div className="column-intro">
-            <p className="mono-label">演習</p>
             <h2>{isTutorial ? "使い方を学ぶ" : "演習を選ぶ"}</h2>
-            <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません．途中でもガイドを終了できます．" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
+            <p className="column-description">{isTutorial ? "例題の編集や採点は演習に影響しません。途中でもガイドを終了できます。" : "危険な処理を実行せず、分解の仕方だけを練習します。"}</p>
           </div>
 
           {isTutorial ? <ol className="tutorial-outline" aria-label="使い方ガイドの流れ">
@@ -571,7 +603,6 @@ export default function Home() {
           </section>
 
           <div className="left-footer">
-            <span className="safety-stamp">実処理なし</span>
             <p>教育用プロトタイプ<br />実処理は行いません・採点と評価観点の提案時にLLMと通信</p>
           </div>
         </aside>
@@ -581,10 +612,9 @@ export default function Home() {
             {guide("overview")}
             <div className="overview-heading">
               <div>
-                <p className="mono-label accent-label">{activeScenario.eyebrow}</p>
                 <h1 id="workspace-title" ref={workspaceTitle} tabIndex={-1}>{activeScenario.title}</h1>
               </div>
-              {activeScenario.id.startsWith("custom-") ? <button className="button button-complete" type="button" onClick={() => setEditingScenario(customScenarios.find(({ id }) => id === activeScenario.id))}>問題・評価観点を編集</button> : <span className="scenario-count">{String(activeScenario.id).toUpperCase()}</span>}
+              {activeScenario.id.startsWith("custom-") && <button className="button button-complete" type="button" onClick={() => setEditingScenario(customScenarios.find(({ id }) => id === activeScenario.id))}>問題・評価観点を編集</button>}
             </div>
             <p className="overview-description">{activeScenario.description}</p>
             <div className="overview-meta" aria-label="演習の概要">
@@ -607,7 +637,7 @@ export default function Home() {
               <table><caption>入力データ / 昨日と今日のファイル一覧</caption><thead><tr><th scope="col">ファイル名</th><th scope="col">昨日（バイト）</th><th scope="col">今日（バイト）</th></tr></thead><tbody>
                 {TUTORIAL_INPUT.map((row) => <tr key={row.file}><th scope="row">{row.file}</th><td>{row.before}</td><td>{row.after}</td></tr>)}
               </tbody></table>
-              <p>この一覧をどう確認・比較・報告するかを，AI への指示として書きます．</p>
+              <p>この一覧をどう確認・比較・報告するかを、AI への指示として書きます。</p>
             </div>}
           </div>
 
@@ -615,8 +645,7 @@ export default function Home() {
             {guide("decompose")}
             <div className="section-heading">
               <div>
-                <p className="mono-label">タスクの分解</p>
-                <h2>分解の進捗</h2>
+                <h2>分解タスク一覧</h2>
               </div>
               <span className="progress-count">{steps.length}件のタスク</span>
             </div>
@@ -635,14 +664,19 @@ export default function Home() {
                 </li>
               ))}
             </ol>
+            <div className="progress-add-task">
+              <button className="add-task-button" type="button" onClick={addStep} disabled={steps.length >= 20}>
+                <span className="add-symbol" aria-hidden="true">＋</span>
+                <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+              </button>
+            </div>
           </div>
 
           <div className="task-list-heading">
             <div>
-              <p className="mono-label">タスク計画</p>
-              <h2>分析タスク</h2>
+              <h2>タスクへの指示</h2>
+              <p className="helper-copy">タスクの実施内容・LLMの情報取り扱いを記述しましょう。</p>
             </div>
-            <p className="helper-copy">安全な順序と、Agentに渡す境界を設計します。</p>
           </div>
 
           <Tooltip.Provider delayDuration={450} skipDelayDuration={200}>
@@ -775,20 +809,18 @@ export default function Home() {
           {guide("organize")}
           <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep} disabled={steps.length >= 20}>
             <span className="add-symbol" aria-hidden="true">＋</span>
-            <span><strong>分析タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+            <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
           </button>
 
-          <p className="keyboard-note"><span aria-hidden="true">⌘</span> フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
+          <p className="keyboard-note">フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
         </section>
 
         <aside className={`right-column${scoredEvaluation ? " is-scored" : ""}${target("feedback")}`} aria-label="計画の評価">
           {guide("feedback")}
           <div className="score-panel-header">
             <div>
-              <p className="mono-label">振り返り</p>
               <h2>計画の評価</h2>
             </div>
-            <span className="live-badge">{evaluationSource}</span>
           </div>
 
           <div className={`score-summary score-${summaryTone}`} aria-live="polite" aria-atomic="true">
@@ -817,6 +849,7 @@ export default function Home() {
                     ? "安全な分析の骨格ができています。"
                     : "採点結果をもとに計画を改善できます。"}
             </p>
+            <p className="score-rules">合格条件：80点以上・必須項目すべて充足・各軸12点以上</p>
           </div>
 
           <div className="criteria-block">
@@ -844,6 +877,49 @@ export default function Home() {
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
                     ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
+                    {((criterion.subcriteria?.length ?? 0) > 0 || (criterion.findings?.length ?? 0) > 0) && (
+                      <Accordion.Root className="step-evaluation" type="single" collapsible>
+                        <Accordion.Item value="subcriteria">
+                          <Accordion.Header className="step-evaluation-header">
+                            <Accordion.Trigger className="step-evaluation-trigger">
+                              <span>{criterion.subcriteria?.length ? "観点別点数" : "減点根拠"}</span>
+                              <span className="step-evaluation-meta"><small>{criterion.subcriteria?.length || criterion.findings?.length}件</small><span className="step-evaluation-chevron" aria-hidden="true">⌄</span></span>
+                            </Accordion.Trigger>
+                          </Accordion.Header>
+                          <Accordion.Content className="step-evaluation-content">
+                            {criterion.subcriteria && criterion.subcriteria.length > 0 && (
+                              <ul className="criterion-subcriteria">
+                                {criterion.subcriteria.map((subcriterion) => (
+                                  <li key={`${criterion.id}-${subcriterion.id}`}>
+                                    <div>
+                                      <strong>{subcriterion.label}</strong>
+                                      <span>{subcriterion.score}<small>/{subcriterion.max}</small>{subcriterion.status && <small>{STATUS_LABELS[subcriterion.status]}</small>}</span>
+                                    </div>
+                                    <p>{subcriterion.message}</p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                            {criterion.findings && criterion.findings.length > 0 && (
+                              <ul className="criterion-findings">
+                                {criterion.findings.map((finding) => (
+                                  <li key={`${criterion.id}-${finding.code}-${finding.evidence}`}>
+                                    <div className="criterion-finding-heading">
+                                      <strong>{finding.label}</strong>
+                                      <span>−{finding.points}点</span>
+                                    </div>
+                                    {finding.stepReferences.length > 0 && (
+                                      <p className="criterion-finding-location">{finding.stepReferences.join("・")}</p>
+                                    )}
+                                    <p>{finding.guidance}</p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </Accordion.Content>
+                        </Accordion.Item>
+                      </Accordion.Root>
+                    )}
                     {criterion.stepDetails && criterion.stepDetails.length > 0 && (
                       <Accordion.Root className="step-evaluation" type="single" collapsible>
                         <Accordion.Item value="details">
@@ -878,21 +954,54 @@ export default function Home() {
             </div>
           </div>
 
+          {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
+            <section className="strength-block" aria-label="評価された点">
+              <div className="subsection-heading">
+                <span className="mono-label">評価された点</span>
+              </div>
+              <ul className="feedback-list">
+                {scoredEvaluation.strengths.map((strength, index) => (
+                  <li key={`${index}-${strength}`}>
+                    <span aria-hidden="true">・</span>
+                    <span>{strength}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <div className="feedback-block">
             <div className="subsection-heading">
               <span className="mono-label">次の改善点</span>
-              <span className="feedback-mark" aria-hidden="true">↗</span>
             </div>
+            {scoredEvaluation && scoredEvaluation.deductions.length > 0 && (
+              <div className="deduction-block">
+                <span className="mono-label">減点・上限</span>
+                <ul className="criterion-findings">
+                  {scoredEvaluation.deductions.map((deduction, index) => (
+                    <li key={`${deduction.id}-${index}`}>
+                      <div className="criterion-finding-heading">
+                        <strong>{deduction.label}</strong>
+                        <span>総合 上限{deduction.cap}点</span>
+                      </div>
+                      <p className="criterion-finding-location">{deduction.stepReferences.join("・")}</p>
+                      <p className="criterion-finding-evidence">{deduction.evidence.map((evidence) => `「${evidence}」`).join(" / ")}</p>
+                      <p>{deduction.reason}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <ul className="feedback-list">
               {!scoredEvaluation ? (
                 <li><span aria-hidden="true">・</span>採点後に改善提案を表示します。</li>
-              ) : scoredEvaluation.improvements.length > 0 ? scoredEvaluation.improvements.slice(0, 3).map((improvement) => (
-                <li key={improvement}><span aria-hidden="true">・</span>{improvement}</li>
+              ) : displayedFeedback.length > 0 ? displayedFeedback.map((improvement) => (
+                <li key={improvement}>
+                  <span aria-hidden="true">・</span>
+                  <FeedbackMessage message={improvement} />
+                </li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
-            {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
-              <p className="strength-note">{scoredEvaluation.strengths[0]}</p>
-            )}
           </div>
 
           <div className="score-actions">
@@ -905,7 +1014,6 @@ export default function Home() {
               aria-busy={isEvaluating}
             >
               <span>{isEvaluating ? "LLMで採点中..." : "この計画を採点"}</span>
-              <span aria-hidden="true">{isEvaluating ? "…" : "→"}</span>
             </button>
             {evaluationError && <p className="evaluation-error" role="alert">{evaluationError}</p>}
             {guide("finish")}
@@ -921,14 +1029,14 @@ export default function Home() {
               <p className="completion-note" role="status">
                 {!scoredEvaluation || hasUnscoredChanges
                   ? "現在の計画を採点してから完了判定を行います。"
-                  : "合格点は80点です。右の提案から計画を改善しましょう。"}
+                  : scoredEvaluation.gateFailures[0] ?? "右の提案から計画を改善しましょう。"}
               </p>
             )}
           </div>
           <p className="live-region" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
           <p className="right-footnote">
             {scoredEvaluation
-              ? `採点: ${evaluationSource} / ${scoredEvaluation.model}`
+              ? `採点: ${scoredEvaluation.provider.toUpperCase()} / ${scoredEvaluation.model}`
               : "評価時に入力内容を設定済みのLLMへ送信します。"}
             <br />評価は教育上の助言であり、実環境の安全性を保証しません。
           </p>
