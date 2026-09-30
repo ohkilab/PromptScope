@@ -960,6 +960,7 @@ button:disabled {
 }
 
 .criteria-block,
+.strength-block,
 .feedback-block {
   padding-top: 22px;
 }
@@ -1269,10 +1270,9 @@ button:disabled {
   padding-bottom: 17px;
 }
 
-.feedback-mark {
-  color: var(--lime-dark);
-  font-size: 17px;
-  line-height: 1;
+.strength-block {
+  border-bottom: 1px solid var(--line-strong);
+  padding-bottom: 20px;
 }
 
 .feedback-list {
@@ -1298,21 +1298,42 @@ button:disabled {
 }
 
 .feedback-list .feedback-message {
+  position: relative;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feedback-message-text,
+.feedback-message-measure {
+  display: block;
+}
+
+.feedback-message-text.is-collapsed {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
-.strength-note {
-  margin: 15px 0 0;
-  padding: 9px 10px;
-  border-left: 2px solid var(--lime);
-  background: rgba(29, 112, 184, 0.1);
-  color: var(--ink-muted);
-  font-size: 10px;
-  line-height: 1.5;
+.feedback-message-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.feedback-message-toggle {
+  display: block;
+  margin-top: 2px;
+  padding: 0;
+  background: none;
+  color: var(--lime-dark);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .score-actions {
@@ -2732,18 +2753,13 @@ body {
   line-height: 1.55;
 }
 
+.strength-block,
 .feedback-block {
   border-bottom-color: #cbd4da;
 }
 
-.feedback-mark,
 .feedback-list li > span {
   color: var(--lime-dark);
-}
-
-.strength-note {
-  border-left-color: var(--console-green);
-  background: #e5f2ea;
 }
 
 .score-actions {

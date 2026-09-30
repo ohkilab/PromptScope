@@ -98,6 +98,39 @@ function scoreTone(score: number) {
   return "low";
 }
 
+function FeedbackMessage({ message }: { message: string }) {
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [isLong, setIsLong] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    const measure = measureRef.current;
+    if (!measure) return;
+
+    const updateLength = () => {
+      const lineHeight = parseFloat(getComputedStyle(measure).lineHeight);
+      setIsLong(measure.getBoundingClientRect().height > lineHeight * 3 + 1);
+    };
+
+    updateLength();
+    const observer = new ResizeObserver(updateLength);
+    observer.observe(measure);
+    return () => observer.disconnect();
+  }, [message]);
+
+  return (
+    <span className="feedback-message">
+      <span className={expanded ? "feedback-message-text" : "feedback-message-text is-collapsed"}>{message}</span>
+      <span className="feedback-message-measure" ref={measureRef} aria-hidden="true">{message}</span>
+      {isLong && (
+        <button className="feedback-message-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+          {expanded ? "閉じる" : "…続きを読む"}
+        </button>
+      )}
+    </span>
+  );
+}
+
 export default function Home() {
   const [view, setView] = useState<"welcome" | "tutorial" | "exercise">("welcome");
   const [tutorialIndex, setTutorialIndex] = useState(0);
@@ -844,34 +877,48 @@ export default function Home() {
                       aria-label={`${criterion.label} ${criterionScore}/${criterion.max}点`}
                     ><Progress.Indicator className="criterion-track-indicator" style={{ width: `${percent}%` }} /></Progress.Root>
                     <p>{criterion.message}</p>
-                    {criterion.subcriteria && criterion.subcriteria.length > 0 && (
-                      <ul className="criterion-subcriteria">
-                        {criterion.subcriteria.map((subcriterion) => (
-                          <li key={`${criterion.id}-${subcriterion.id}`}>
-                            <div>
-                              <strong>{subcriterion.label}</strong>
-                              <span>{subcriterion.score}<small>/{subcriterion.max}</small>{subcriterion.status && <small>{STATUS_LABELS[subcriterion.status]}</small>}</span>
-                            </div>
-                            <p>{subcriterion.message}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    {criterion.findings && criterion.findings.length > 0 && (
-                      <ul className="criterion-findings">
-                        {criterion.findings.map((finding) => (
-                          <li key={`${criterion.id}-${finding.code}-${finding.evidence}`}>
-                            <div className="criterion-finding-heading">
-                              <strong>{finding.label}</strong>
-                              <span>−{finding.points}点</span>
-                            </div>
-                            {finding.stepReferences.length > 0 && (
-                              <p className="criterion-finding-location">{finding.stepReferences.join("・")}</p>
+                    {((criterion.subcriteria?.length ?? 0) > 0 || (criterion.findings?.length ?? 0) > 0) && (
+                      <Accordion.Root className="step-evaluation" type="single" collapsible>
+                        <Accordion.Item value="subcriteria">
+                          <Accordion.Header className="step-evaluation-header">
+                            <Accordion.Trigger className="step-evaluation-trigger">
+                              <span>{criterion.subcriteria?.length ? "観点別点数" : "減点根拠"}</span>
+                              <span className="step-evaluation-meta"><small>{criterion.subcriteria?.length || criterion.findings?.length}件</small><span className="step-evaluation-chevron" aria-hidden="true">⌄</span></span>
+                            </Accordion.Trigger>
+                          </Accordion.Header>
+                          <Accordion.Content className="step-evaluation-content">
+                            {criterion.subcriteria && criterion.subcriteria.length > 0 && (
+                              <ul className="criterion-subcriteria">
+                                {criterion.subcriteria.map((subcriterion) => (
+                                  <li key={`${criterion.id}-${subcriterion.id}`}>
+                                    <div>
+                                      <strong>{subcriterion.label}</strong>
+                                      <span>{subcriterion.score}<small>/{subcriterion.max}</small>{subcriterion.status && <small>{STATUS_LABELS[subcriterion.status]}</small>}</span>
+                                    </div>
+                                    <p>{subcriterion.message}</p>
+                                  </li>
+                                ))}
+                              </ul>
                             )}
-                            <p>{finding.guidance}</p>
-                          </li>
-                        ))}
-                      </ul>
+                            {criterion.findings && criterion.findings.length > 0 && (
+                              <ul className="criterion-findings">
+                                {criterion.findings.map((finding) => (
+                                  <li key={`${criterion.id}-${finding.code}-${finding.evidence}`}>
+                                    <div className="criterion-finding-heading">
+                                      <strong>{finding.label}</strong>
+                                      <span>−{finding.points}点</span>
+                                    </div>
+                                    {finding.stepReferences.length > 0 && (
+                                      <p className="criterion-finding-location">{finding.stepReferences.join("・")}</p>
+                                    )}
+                                    <p>{finding.guidance}</p>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </Accordion.Content>
+                        </Accordion.Item>
+                      </Accordion.Root>
                     )}
                     {criterion.stepDetails && criterion.stepDetails.length > 0 && (
                       <Accordion.Root className="step-evaluation" type="single" collapsible>
@@ -907,10 +954,25 @@ export default function Home() {
             </div>
           </div>
 
+          {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
+            <section className="strength-block" aria-label="評価された点">
+              <div className="subsection-heading">
+                <span className="mono-label">評価された点</span>
+              </div>
+              <ul className="feedback-list">
+                {scoredEvaluation.strengths.map((strength, index) => (
+                  <li key={`${index}-${strength}`}>
+                    <span aria-hidden="true">・</span>
+                    <span>{strength}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <div className="feedback-block">
             <div className="subsection-heading">
               <span className="mono-label">次の改善点</span>
-              <span className="feedback-mark" aria-hidden="true">↗</span>
             </div>
             {scoredEvaluation && scoredEvaluation.deductions.length > 0 && (
               <div className="deduction-block">
@@ -936,13 +998,10 @@ export default function Home() {
               ) : displayedFeedback.length > 0 ? displayedFeedback.map((improvement) => (
                 <li key={improvement}>
                   <span aria-hidden="true">・</span>
-                  <span className="feedback-message">{improvement}</span>
+                  <FeedbackMessage message={improvement} />
                 </li>
               )) : <li><span aria-hidden="true">✓</span>今の計画に大きな改善点はありません。</li>}
             </ul>
-            {scoredEvaluation && scoredEvaluation.strengths.length > 0 && (
-              <p className="strength-note">{scoredEvaluation.strengths[0]}</p>
-            )}
           </div>
 
           <div className="score-actions">
@@ -955,7 +1014,6 @@ export default function Home() {
               aria-busy={isEvaluating}
             >
               <span>{isEvaluating ? "LLMで採点中..." : "この計画を採点"}</span>
-              <span aria-hidden="true">{isEvaluating ? "…" : "→"}</span>
             </button>
             {evaluationError && <p className="evaluation-error" role="alert">{evaluationError}</p>}
             {guide("finish")}
