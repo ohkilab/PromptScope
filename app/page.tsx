@@ -978,7 +978,7 @@ export default function Home() {
           <p className="live-region" role="status" aria-live="polite" aria-atomic="true">{liveMessage}</p>
           <p className="right-footnote">
             {scoredEvaluation
-              ? `採点: ${evaluationSource} / ${scoredEvaluation.model}`
+              ? `採点: ${scoredEvaluation.provider.toUpperCase()} / ${scoredEvaluation.model}`
               : "評価時に入力内容を設定済みのLLMへ送信します。"}
             <br />評価は教育上の助言であり、実環境の安全性を保証しません。
           </p>
