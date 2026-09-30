@@ -5,7 +5,9 @@ import { tsImport } from "tsx/esm/api";
 const {
   analyzeStepText,
   resolveRubric,
+  planEvaluationSchema,
   sentenceOptions,
+  stepEvaluationSchema,
   scoreEvaluation,
   validatePlanEvaluation,
   validateStepEvaluation,
@@ -40,6 +42,11 @@ function firstSentence(step) {
   return step.instruction.split("。")[0] + "。";
 }
 
+/** コンテキスト充足の項目はコンテキスト欄だけを根拠にできるため、その欄の最初の文を使う。 */
+function evidenceFor(entry, step) {
+  return entry.item.criterion === "context" ? step.context.split("。")[0] + "。" : firstSentence(step);
+}
+
 /** statuses: { key: status } for the plan, { "stepId:key": status } for a task. */
 function rawPlan(targetRequest, rubric, overrides = {}) {
   return {
@@ -48,7 +55,7 @@ function rawPlan(targetRequest, rubric, overrides = {}) {
       return {
         key: entry.key,
         status,
-        evidence: status === "missing" ? "" : firstSentence(targetRequest.steps[0]),
+        evidence: status === "missing" ? "" : evidenceFor(entry, targetRequest.steps[0]),
         reason: status === "met" ? "" : `${entry.label}が不足しています。`,
       };
     }),
@@ -69,7 +76,7 @@ function rawStep(step, rubric, overrides = {}) {
       return {
         key: entry.key,
         status,
-        evidence: status === "missing" ? "" : firstSentence(step),
+        evidence: status === "missing" ? "" : evidenceFor(entry, step),
         reason: status === "met" ? "" : `${entry.label}が不足しています。`,
       };
     }),
@@ -90,7 +97,7 @@ function criterion(result, id) {
 }
 
 test("5種別と例題のルーブリックは各軸20点で、種別ごとに項目と工程が異なる", () => {
-  assert.equal(RUBRIC_VERSION, "2026-09-29.1");
+  assert.equal(RUBRIC_VERSION, "2026-09-30.5");
   for (const typeId of ["malware", "vulnerability", "logs", "incident-response", "other", "tutorial"]) {
     const definition = rubricFor(typeId);
     for (const axis of ["granularity", "context", "safety", "verifiability", "artifact"]) {
@@ -204,7 +211,8 @@ test("無意味な入力はLLMの判定にかかわらず未充足にし、混�
   const issues = analyzeStepText(noiseRequest);
   assert.equal(issues[0].empty, true);
   const raw = rawStep(noiseRequest.steps[0], rubric);
-  raw.results = raw.results.map((item) => ({ ...item, evidence: "aaaaaa asdf" }));
+  // LLMが無意味な文字列を根拠に充足と返しても、コードの判定で未充足にする。
+  raw.results = raw.results.map((item) => ({ ...item, evidence: rubric.stepEntries.find(({ key }) => key === item.key).item.criterion === "context" ? "TODO" : "aaaaaa asdf" }));
   const results = validateStepEvaluation(raw, noiseRequest, rubric, "scope", issues[0]);
   assert.ok(results.every((result) => result.status === "missing"));
 
@@ -291,4 +299,50 @@ test("根拠の候補はファイル名の途中で文を区切らず、理由�
   const coverage = criterion(phase, "granularity").findings.find(({ code }) => code === "coverage");
   assert.equal(coverage.points, 2, "floor((4+4+2+0)/4)=2");
   assert.match(coverage.guidance, /緩和策と修正後の再確認（未充足）/);
+});
+
+test("コンテキスト充足は、コンテキスト欄の文だけを根拠にできる", () => {
+  // 指示欄は同じで、コンテキスト欄だけを空にした計画（投稿ケースの context-fields-empty に相当）。
+  const emptyContext = { ...request, steps: request.steps.map((step) => ({ ...step, context: "" })) };
+  const rubric = resolveRubric(emptyContext);
+  const schema = stepEvaluationSchema(rubric, emptyContext.steps[0], emptyContext.scenario);
+  const grounded = schema.properties.results.items.anyOf.filter((variant) => variant.properties.status.enum[0] !== "missing");
+  const contextKeys = rubric.stepEntries.filter(({ item }) => item.criterion === "context" && item.id !== "inputs").map(({ key }) => key);
+  assert.ok(grounded.every((variant) => contextKeys.every((key) => !variant.properties.key.enum.includes(key))),
+    "コンテキスト欄が空なら、対象・入力の特定以外のコンテキスト充足の項目は未充足しか選べない");
+  // 対象・入力の特定は、演習の問題文の文だけを根拠にできる（指示欄の文は選べない）。
+  const inputs = grounded.find((variant) => variant.properties.key.enum.includes("inputs"));
+  assert.deepEqual(inputs.properties.key.enum, ["inputs"]);
+  assert.ok(inputs.properties.evidence.enum.includes("検証用サービスのリスク調査"));
+  assert.ok(!inputs.properties.evidence.enum.includes(firstSentence(emptyContext.steps[0])));
+
+  // 指示欄の文をコンテキスト充足の根拠にした応答は受け付けない。
+  const issues = analyzeStepText(emptyContext);
+  const raw = rawStep(emptyContext.steps[0], rubric);
+  raw.results = raw.results.map((item) => ({ ...item, evidence: firstSentence(emptyContext.steps[0]) }));
+  assert.throws(() => validateStepEvaluation(raw, emptyContext, rubric, "scope", issues[0]), /evidence not found in task scope for inputs/);
+
+  const plan = rawPlan(request, rubric);
+  const premise = plan.results.find(({ key }) => key.startsWith("premises:"));
+  premise.evidence = firstSentence(request.steps[0]);
+  assert.throws(() => validatePlanEvaluation(plan, request, resolveRubric(request), analyzeStepText(request)), /evidence not found in plan for premises:/);
+  const planSchema = planEvaluationSchema(rubric, emptyContext);
+  const planGrounded = planSchema.properties.results.items.anyOf.filter((variant) => variant.properties.status.enum[0] !== "missing");
+  assert.ok(planGrounded.every((variant) => !variant.properties.key.enum.some((key) => key.startsWith("premises:") || key === "specific-context")));
+});
+
+test("停止条件の配点は、全分野で4点にそろえる", () => {
+  const stopItems = { malware: "approval-stop", vulnerability: "out-of-scope-stop", logs: "stop", "incident-response": "rollback", other: "stop" };
+  for (const [typeId, itemId] of Object.entries(stopItems)) {
+    assert.equal(rubricFor(typeId).items.find(({ id }) => id === itemId).max, 4, typeId);
+  }
+});
+
+test("コンテキスト充足は、種別の必須前提・問題固有の観点と、タスクごとの4項目で20点になる", () => {
+  for (const typeId of ["malware", "vulnerability", "logs", "incident-response", "other"]) {
+    const context = rubricFor(typeId).items.filter((item) => item.criterion === "context");
+    assert.deepEqual(context.map(({ id, max }) => [id, max]), [
+      ["premises", 4], ["specific-context", 3], ["inputs", 5], ["needs", 3], ["missing-input", 3], ["accuracy", 2],
+    ], typeId);
+  }
 });

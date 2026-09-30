@@ -224,7 +224,9 @@ const STATUS_GUIDE = `statusの基準:
 - missing: 記載がない。
 語句があるだけでなく、descriptionの要件を満たすかで判断します。
 met・mostly・partialでは、根拠の文をevidenceに入力から選んで複写します。missingではevidenceを空文字にします。
-reasonはmet以外で、何が足りないかを60字以内の日本語で具体的に書きます。metでは空文字にします。`;
+reasonはmet以外で、何が足りないかを60字以内の日本語で具体的に書きます。metでは空文字にします。
+axisがcontext（コンテキスト充足）の項目は、各タスクのcontext欄の文だけを根拠にします。instruction欄やtitleに書かれていても、context欄になければ満たしたことにはなりません。
+ただしinputs（対象・入力の特定）は、演習の問題文（scenario）で対象が示されていて、タスクがその対象を扱うことが明らかなら、その問題文の文を根拠にして充足にできます。`;
 
 const EVALUATOR_ROLE = `あなたは、AIエージェントへ渡すセキュリティ分析計画を採点する教育評価者です。
 評価するのは学習者が書いた「タスクの指示とコンテキスト」の文章で、分析結果そのものではありません。
@@ -242,7 +244,7 @@ function scenarioSummary(request: EvaluationRequest) {
 }
 
 function entryList(entries: RubricEntry[]) {
-  return entries.map((entry) => ({ key: entry.key, label: entry.label, description: entry.description }));
+  return entries.map((entry) => ({ key: entry.key, axis: entry.item.criterion, label: entry.label, description: entry.description }));
 }
 
 function stepMessages(
@@ -297,6 +299,11 @@ ${JSON.stringify(entryList(rubric.planEntries), null, 2)}
 ## unsafe
 演習で禁止されている操作（本番・ホストでの実行、許可範囲外へのアクセス、破壊的な操作、秘密値の復元や外部送信など）を、実行するようAgentに明示的に指示している文だけを報告します。
 禁止・否定する文、引用・例示、仮説、承認後に行う計画は該当しません。危険な語があるだけで報告しないでください。該当がなければ空配列にします。
+
+## 個人情報・秘密値の扱い
+個人情報・秘密値・認証情報を、匿名化や伏せ字などで保護せずに記録・送信・共有させる指示や、匿名化された値を復元・実在の人物と照合させる指示がある場合は、その文をunsafeに報告します。
+あわせて、秘密値・匿名化・機密・情報保護・共有範囲にかかわる判定項目はmetにせず、reasonに保護されていないことを書きます。
+伏せ字にする、匿名化された値だけを使う、共有先を限定するといった保護の指示は、これらの項目を満たす根拠になります。
 
 ## strengths
 計画の良い点を、3件以内の短い日本語で返します。`;
@@ -614,7 +621,7 @@ export async function evaluatePlanWithLlm(request: EvaluationRequest, signal?: A
     config,
     `step_evaluation_${index + 1}`,
     stepMessages(request, rubric, index, issues[index]),
-    stepEvaluationSchema(rubric, step),
+    stepEvaluationSchema(rubric, step, request.scenario),
     (raw) => validateStepEvaluation(raw, request, rubric, step.id, issues[index]),
     callSignal,
   ));

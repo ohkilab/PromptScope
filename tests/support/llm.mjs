@@ -1,9 +1,17 @@
 /** Answers any evaluation call with every item met, using the grounded enums in the schema. */
 export function answerFromSchema(schema) {
-  const [grounded] = schema.properties.results.items.anyOf;
-  const evidence = grounded.properties.evidence.enum[0];
+  // 根拠の候補は軸ごとに分かれる（コンテキスト充足はコンテキスト欄だけ）。候補がない項目はmissingにする。
+  const items = schema.properties.results.items;
+  const variants = items.anyOf ?? [items];
+  const missing = variants.find((variant) => variant.properties.status.enum.includes("missing"));
+  const grounded = variants.filter((variant) => variant !== missing);
   const body = {
-    results: grounded.properties.key.enum.map((key) => ({ key, status: "met", evidence, reason: "" })),
+    results: missing.properties.key.enum.map((key) => {
+      const variant = grounded.find((candidate) => candidate.properties.key.enum.includes(key));
+      return variant
+        ? { key, status: "met", evidence: variant.properties.evidence.enum[0], reason: "" }
+        : { key, status: "missing", evidence: "", reason: "根拠がありません" };
+    }),
   };
   if (schema.properties.taskRoles) {
     const phases = schema.properties.taskRoles.items.properties.phase.enum;

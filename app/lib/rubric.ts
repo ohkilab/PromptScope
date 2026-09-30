@@ -34,7 +34,7 @@ export type TaskTypeRubric = {
   stepHint: string;
 };
 
-export const RUBRIC_VERSION = "2026-09-29.1";
+export const RUBRIC_VERSION = "2026-09-30.5";
 export const PASS_SCORE = 80;
 export const AXIS_MINIMUM = 12;
 export const STEP_AXIS_MINIMUM = 12;
@@ -97,9 +97,9 @@ function sharedStepAxes(): RubricItem[] {
     ...axis("context", [
       { id: "premises", label: "種別の必須前提", description: "premisesの各前提を、計画のいずれかのタスクで具体的に渡しているか。", max: 4, core: true, kind: "checklist" },
       specific(3),
-      { id: "inputs", label: "入力の特定", description: "このタスクで使う対象・資料・データ、または前段の特定の成果物を示す。『必要な情報』『前の結果』だけでは充足しない。", max: 5, scope: "step" },
-      { id: "needs", label: "タスクに必要な前提と制約", description: "このタスクの判断に必要な範囲・条件・形式などの前提を渡している。", max: 4, scope: "step" },
-      { id: "missing-input", label: "情報不足への対応", description: "入力が不足・欠損・未確認の場合に推測で補わず、確認先を示すか作業を保留する。", max: 2, scope: "step" },
+      { id: "inputs", label: "対象・入力の特定", description: "何を対象にし、どのデータ・ファイル・証跡を使うかを示す。『必要な情報』『前の結果』だけでは充足しない。前段のタスクの成果物を名前で指している場合（例：「前段の時系列表」）は、ファイル名やパスがなくても入力の特定として充足する。演習の問題文で対象が示されていて（例：タイトルの sample.exe）、タスクがその対象を扱うことが明らかな場合も充足する。", max: 5, scope: "step" },
+      { id: "needs", label: "前提・条件", description: "環境、利用可能な情報、適用条件など、このタスクの判断に必要な前提を渡している。", max: 3, scope: "step" },
+      { id: "missing-input", label: "情報不足への対応", description: "入力が不足・欠損・未確認の場合に推測で補わず、確認先を示すか作業を保留する。", max: 3, scope: "step" },
       { id: "accuracy", label: "記述の正確さ", description: "met=誤字・無意味な語がない。mostly=意味が変わらない軽い誤字が少しある。partial=無意味な語が混ざる、または誤字で意味が曖昧。missing=存在しないタスク・資料・値を指し対象を特定できない。", max: 2, scope: "step", kind: "accuracy" },
     ]),
   ];
@@ -193,10 +193,10 @@ const RUBRICS: Record<RubricTypeId, TaskTypeRubric> = {
     { id: "anonymization", label: "匿名化規則と欠損の扱い" },
   ], "時系列化と仮説の判断を同じタスクに混ぜない。実際の異常検出結果は求めない。", [
     ...axis("safety", [
-      { id: "read-only", label: "読み取りのみ・原本の保全", description: "提供されたログの読み取りだけに限定し、原本を変更しない。", max: 6, core: true },
-      { id: "no-reidentification", label: "匿名値の復元・照合の禁止", description: "匿名化された値を復元したり、実在のユーザーと照合したりしない。", max: 5, core: true },
+      { id: "read-only", label: "読み取りのみ・原本の保全", description: "提供されたログの読み取りだけに限定し、原本を変更しない。", max: 5, core: true },
+      { id: "no-reidentification", label: "匿名値の復元・照合の禁止", description: "匿名化された値を復元したり、実在のユーザーと照合したりしない。", max: 4, core: true },
       { id: "approval", label: "変更操作を承認事項にする", description: "アカウント停止や設定変更は提案にとどめ、承認者を示す。", max: 4 },
-      { id: "stop", label: "停止条件", description: "実在の個人情報や秘密値を見つけた場合に中断し、報告する。", max: 2 },
+      { id: "stop", label: "停止条件", description: "実在の個人情報や秘密値を見つけた場合に中断し、報告する。", max: 4 },
       specific(3),
     ]),
     ...axis("verifiability", [

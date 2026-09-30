@@ -53,15 +53,27 @@ test("タスクごとの判定と計画全体の判定を別々の呼び出し�
     assert.equal(body.options.num_ctx, 8_192);
     assert.equal(body.options.num_predict, 4_096);
   }
-  // タスクの判定は、そのタスクの文だけを根拠に選ばせる。
+  // タスクの判定は、そのタスクの文だけを根拠に選ばせる。コンテキスト充足はコンテキスト欄の文だけ。
   const scopeCall = stepBodies.find((body) => body.prompt.includes('"number": 1,\n    "of": 2'));
-  const [grounded, missing] = scopeCall.format.properties.results.items.anyOf;
-  assert.ok(grounded.properties.evidence.enum.includes("検証用APIの対象と許可範囲を表にする。"));
-  assert.ok(!grounded.properties.evidence.enum.includes("確認結果と判断根拠を報告書に記録する。"));
-  assert.ok(!grounded.properties.evidence.enum.includes(""), "missing以外は根拠を必須にする");
+  const variants = scopeCall.format.properties.results.items.anyOf;
+  const variantFor = (key) => variants.find((variant) => variant.properties.status.enum[0] !== "missing" && variant.properties.key.enum.includes(key));
+  const general = variantFor("purpose");
+  const inputs = variantFor("inputs");
+  const context = variantFor("needs");
+  const missing = variants.find((variant) => variant.properties.status.enum[0] === "missing");
+  assert.deepEqual(general.properties.key.enum, ["purpose", "size", "handoff", "acceptance"]);
+  assert.deepEqual(inputs.properties.key.enum, ["inputs"]);
+  assert.deepEqual(context.properties.key.enum, ["needs", "missing-input", "accuracy"]);
+  assert.ok(general.properties.evidence.enum.includes("検証用APIの対象と許可範囲を表にする。"));
+  assert.ok(!general.properties.evidence.enum.includes("確認結果と判断根拠を報告書に記録する。"));
+  assert.deepEqual(context.properties.evidence.enum, ["入力はローカルの設定ファイルです。"], "コンテキスト充足は指示欄を根拠にできない");
+  // 対象・入力の特定は、コンテキスト欄に加えて演習の問題文も根拠にできる（指示欄は不可）。
+  assert.ok(inputs.properties.evidence.enum.includes("入力はローカルの設定ファイルです。"));
+  assert.ok(inputs.properties.evidence.enum.includes("ローカルの入力を確認する"));
+  assert.ok(!inputs.properties.evidence.enum.includes("検証用APIの対象と許可範囲を表にする。"));
+  assert.ok(!general.properties.evidence.enum.includes(""), "missing以外は根拠を必須にする");
   assert.deepEqual(missing.properties.status.enum, ["missing"]);
-  assert.deepEqual(grounded.properties.key.enum,
-    ["purpose", "size", "handoff", "inputs", "needs", "missing-input", "accuracy", "acceptance"]);
+  assert.match(scopeCall.system, /context欄の文だけを根拠/);
 
   assert.equal(result.total, 100);
   assert.equal(result.passed, true);

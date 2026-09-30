@@ -308,39 +308,65 @@ export function sentenceOptions(texts: string[]): string[] {
     (text.match(/[^。！？．\n]+[。！？．]?/gu) ?? []).map((part) => part.trim()).filter(Boolean)))];
 }
 
-function resultsSchema(entries: RubricEntry[], evidence: string[]) {
-  const common = {
-    key: { type: "string", enum: entries.map((entry) => entry.key) },
-    reason: { type: "string", maxLength: REASON_MAX_LENGTH },
-  };
-  const variant = (statuses: RubricStatus[], evidenceOptions: string[]) => ({
+type Scenario = EvaluationRequest["scenario"];
+
+function scenarioTexts(scenario: Scenario): string[] {
+  return [scenario.title, scenario.description, scenario.goal, scenario.environment, scenario.materials ?? ""];
+}
+
+/**
+ * 項目ごとに根拠として引用できる文。コンテキスト充足の項目はコンテキスト欄の文だけを根拠にし、
+ * 指示欄やタイトルに書かれた内容でコンテキストを満たしたことにはしない。
+ * ただし対象・入力の特定は、演習の問題文で対象が示されていれば（例：タイトルの sample.exe）読み取れるため、
+ * 問題文の文も根拠にできる。
+ */
+function evidenceTexts(entry: RubricEntry, steps: AnalysisStep[], scenario: Scenario): string[] {
+  if (entry.item.criterion !== "context") return steps.flatMap((step) => [step.title, step.instruction, step.context]);
+  const contexts = steps.map((step) => step.context);
+  return entry.item.id === "inputs" ? [...contexts, ...scenarioTexts(scenario)] : contexts;
+}
+
+function resultsSchema(entries: RubricEntry[], steps: AnalysisStep[], scenario: Scenario) {
+  const reason = { type: "string", maxLength: REASON_MAX_LENGTH };
+  const variant = (keys: string[], statuses: RubricStatus[], evidenceOptions: string[]) => ({
     type: "object",
     additionalProperties: false,
     properties: {
-      key: common.key,
+      key: { type: "string", enum: keys },
       status: { type: "string", enum: statuses },
       evidence: { type: "string", enum: evidenceOptions },
-      reason: common.reason,
+      reason,
     },
     required: ["key", "status", "evidence", "reason"],
   });
-  // 小さいモデルは根拠を空にしがちなため、missing以外では根拠の選択をSchemaで必須にする。
+  // 根拠の候補が同じ項目をまとめ、missing以外では候補からの選択をSchemaで必須にする
+  // （小さいモデルは根拠を空にしがちなため）。候補が1文もない項目はmissingしか選べない。
+  const groups = new Map<string, { keys: string[]; evidence: string[] }>();
+  for (const entry of entries) {
+    const evidence = sentenceOptions(evidenceTexts(entry, steps, scenario));
+    const id = JSON.stringify(evidence);
+    const group = groups.get(id) ?? { keys: [], evidence };
+    group.keys.push(entry.key);
+    groups.set(id, group);
+  }
+  const grounded = [...groups.values()]
+    .filter((group) => group.evidence.length > 0)
+    .map((group) => variant(group.keys, ["met", "mostly", "partial"], group.evidence));
+  const missing = variant(entries.map((entry) => entry.key), ["missing"], [""]);
   return {
     type: "array",
     minItems: entries.length,
     maxItems: entries.length,
-    items: evidence.length > 0
-      ? { anyOf: [variant(["met", "mostly", "partial"], evidence), variant(["missing"], [""])] }
-      : variant(["missing"], [""]),
+    items: grounded.length > 0 ? { anyOf: [...grounded, missing] } : missing,
   };
 }
 
-export function stepEvaluationSchema(rubric: ResolvedRubric, step: AnalysisStep) {
+export function stepEvaluationSchema(rubric: ResolvedRubric, step: AnalysisStep, scenario: Scenario) {
   return {
     type: "object",
     additionalProperties: false,
     properties: {
-      results: resultsSchema(rubric.stepEntries, sentenceOptions([step.title, step.instruction, step.context])),
+      results: resultsSchema(rubric.stepEntries, [step], scenario),
     },
     required: ["results"],
   };
@@ -353,7 +379,7 @@ export function planEvaluationSchema(rubric: ResolvedRubric, request: Evaluation
     type: "object",
     additionalProperties: false,
     properties: {
-      results: resultsSchema(rubric.planEntries, evidence),
+      results: resultsSchema(rubric.planEntries, request.steps, request.scenario),
       taskRoles: {
         type: "array",
         minItems: stepIds.length,
@@ -417,13 +443,18 @@ function shortReason(value: unknown): string {
   return typeof value === "string" ? value.trim().slice(0, REASON_MAX_LENGTH) : "";
 }
 
-function validateResults(value: unknown, entries: RubricEntry[], sources: string[], scope: string): ValidatedResult[] {
+function validateResults(
+  value: unknown,
+  entries: RubricEntry[],
+  steps: AnalysisStep[],
+  scenario: Scenario,
+  scope: string,
+): ValidatedResult[] {
   if (!Array.isArray(value)) throw new Error(`LLM response is missing ${scope} results.`);
   const byKey = new Map<string, UnknownRecord>();
   for (const raw of value) {
     if (isRecord(raw) && typeof raw.key === "string" && !byKey.has(raw.key)) byKey.set(raw.key, raw);
   }
-  const normalizedSources = sources.map(normalizedText);
   return entries.map((entry) => {
     const raw = byKey.get(entry.key);
     if (!raw) throw new Error(`LLM response is missing ${scope} result for ${entry.key}.`);
@@ -434,7 +465,7 @@ function validateResults(value: unknown, entries: RubricEntry[], sources: string
     const evidence = typeof raw.evidence === "string" ? raw.evidence.trim() : "";
     if (status !== "missing") {
       if (!evidence) throw new Error(`LLM response is missing evidence for ${scope} ${entry.key}.`);
-      if (!normalizedSources.some((source) => source.includes(normalizedText(evidence)))) {
+      if (!evidenceTexts(entry, steps, scenario).some((source) => normalizedText(source).includes(normalizedText(evidence)))) {
         throw new Error(`LLM response has evidence not found in ${scope} for ${entry.key}.`);
       }
     }
@@ -458,7 +489,7 @@ export function validateStepEvaluation(
   const step = request.steps.find((item) => item.id === stepId);
   if (!step) throw new Error(`Unknown step ${stepId}.`);
   if (!isRecord(value)) throw new Error("LLM response is not a valid step evaluation object.");
-  const results = validateResults(value.results, rubric.stepEntries, [step.title, step.instruction, step.context], `task ${stepId}`);
+  const results = validateResults(value.results, rubric.stepEntries, [step], request.scenario, `task ${stepId}`);
   return results.map((result) => {
     if (issues.empty) {
       return { ...result, status: "missing", evidence: "", reason: "指示とコンテキストが空欄・プレースホルダー・無意味な文字列です。" };
@@ -488,9 +519,8 @@ export function validatePlanEvaluation(
   issues: StepTextIssues[],
 ): ValidatedPlanEvaluation {
   if (!isRecord(value)) throw new Error("LLM response is not a valid plan evaluation object.");
-  const sources = request.steps.flatMap((step) => [step.title, step.instruction, step.context]);
   const allEmpty = issues.every((issue) => issue.empty);
-  const results = validateResults(value.results, rubric.planEntries, sources, "plan").map((result) => allEmpty
+  const results = validateResults(value.results, rubric.planEntries, request.steps, request.scenario, "plan").map((result) => allEmpty
     ? { ...result, status: "missing" as const, evidence: "", reason: "すべてのタスクが空欄・プレースホルダー・無意味な文字列です。" }
     : result);
 
