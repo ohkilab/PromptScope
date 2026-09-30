@@ -667,7 +667,7 @@ export default function Home() {
             <div className="progress-add-task">
               <button className="add-task-button" type="button" onClick={addStep} disabled={steps.length >= 20}>
                 <span className="add-symbol" aria-hidden="true">＋</span>
-                <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+                <span><strong>タスクを追加</strong><small>順序をあとから調整できます</small></span>
               </button>
             </div>
           </div>
@@ -768,7 +768,7 @@ export default function Home() {
                         <div className={`field${index === 0 ? target("instruction") : ""}`}>
                           {index === 0 && guide("instruction")}
                           <label htmlFor={`task-instruction-${step.id}`}>
-                            <span className="field-index">A</span>Agentへの指示
+                            <span className="field-index">A</span>LLMへの指示
                           </label>
                           <textarea
                             id={`task-instruction-${step.id}`}
@@ -809,7 +809,7 @@ export default function Home() {
           {guide("organize")}
           <button className={`add-task-button${target("organize")}`} type="button" onClick={addStep} disabled={steps.length >= 20}>
             <span className="add-symbol" aria-hidden="true">＋</span>
-            <span><strong>タスクを追加</strong><small>順序と引き継ぎをあとから調整できます</small></span>
+            <span><strong>タスクを追加</strong><small>順序をあとから調整できます</small></span>
           </button>
 
           <p className="keyboard-note">フォーカスしたカードは ↑ ↓ で順序を変更できます。各入力欄は自動保存されます。</p>
