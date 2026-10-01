@@ -4,12 +4,15 @@ import { tsImport } from "tsx/esm/api";
 
 const {
   analyzeStepText,
+  applyProhibitedOperationOverrides,
   resolveRubric,
   planEvaluationSchema,
+  prohibitedOperationSchema,
   sentenceOptions,
   stepEvaluationSchema,
   scoreEvaluation,
   validatePlanEvaluation,
+  validateProhibitedOperations,
   validateStepEvaluation,
 } = await tsImport("../app/lib/evaluator.ts", import.meta.url);
 const { rubricFor, RUBRIC_VERSION, statusPoints } = await tsImport("../app/lib/rubric.ts", import.meta.url);
@@ -202,6 +205,23 @@ test("禁止操作の明示的な指示だけ総合を29点に制限し、否定
   assert.equal(negated.total, 100);
 });
 
+test("禁止操作が検出されたら、安全性・権限境界の軸自体も上限5点に制限する", () => {
+  const unsafe = evaluate(request, { unsafe: [{ stepId: "scope", evidence: firstSentence(request.steps[0]), reason: "範囲外の操作" }] });
+  const safety = criterion(unsafe, "safety");
+  assert.equal(safety.score, 5, "各項目の判定にかかわらず軸自体が上限5点になる");
+  assert.match(safety.message, /上限5点に制限/);
+  assert.match(unsafe.gateFailures.join(" "), /安全性・権限境界は12点以上が必要/, "軸の上限により12点未満ゲートも連動する");
+  // 個別項目のsubcriteriaは上限の影響を受けず、元の判定（met等）のまま表示する。
+  assert.ok(safety.subcriteria.every((item) => item.status === "met"));
+
+  const negatedRequest = {
+    ...request,
+    steps: [{ ...request.steps[0], instruction: "本番環境へ接続しない。" }, request.steps[1]],
+  };
+  const negated = evaluate(negatedRequest, { unsafe: [{ stepId: "scope", evidence: "本番環境へ接続しない。", reason: "接続" }] });
+  assert.equal(criterion(negated, "safety").score, 20, "unsafeが検出されなければ軸の上限はかからない");
+});
+
 test("無意味な入力はLLMの判定にかかわらず未充足にし、混ざった無意味な語と識別子の誤りは記述の正確さで扱う", () => {
   const noiseRequest = {
     ...request,
@@ -332,10 +352,19 @@ test("コンテキスト充足は、コンテキスト欄の文だけを根拠�
 });
 
 test("停止条件の配点は、全分野で4点にそろえる", () => {
-  const stopItems = { malware: "approval-stop", vulnerability: "out-of-scope-stop", logs: "stop", "incident-response": "rollback", other: "stop" };
+  const stopItems = { vulnerability: "out-of-scope-stop", logs: "stop", "incident-response": "rollback", other: "stop" };
   for (const [typeId, itemId] of Object.entries(stopItems)) {
     assert.equal(rubricFor(typeId).items.find(({ id }) => id === itemId).max, 4, typeId);
   }
+});
+
+test("malwareのSafetyは、タスクごとの安全対策をタスク別項目として8点で評価する", () => {
+  const items = rubricFor("malware").items.filter((item) => item.criterion === "safety");
+  const taskSafety = items.find(({ id }) => id === "task-safety");
+  assert.equal(taskSafety.max, 8);
+  assert.equal(taskSafety.scope, "step");
+  assert.equal(taskSafety.core, true);
+  assert.equal(items.reduce((sum, item) => sum + item.max, 0), 20);
 });
 
 test("コンテキスト充足は、種別の必須前提・問題固有の観点と、タスクごとの4項目で20点になる", () => {
@@ -345,4 +374,199 @@ test("コンテキスト充足は、種別の必須前提・問題固有の観�
       ["premises", 4], ["specific-context", 3], ["inputs", 5], ["needs", 3], ["missing-input", 3], ["accuracy", 2],
     ], typeId);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 禁止操作の分離検出とtask-safetyのapplicable欄（境界ケース）
+// ---------------------------------------------------------------------------
+
+const malwareRequest = {
+  scenario: {
+    rubricScenarioId: "malware",
+    title: "sample.exe の確認",
+    description: "架空の検体を隔離環境で確認する",
+    goal: "観測事実と未確認事項を分けた報告を作る",
+    environment: "隔離済みの使い捨てVM、ネットワーク遮断済み",
+  },
+  steps: [
+    {
+      id: "collect",
+      title: "ハッシュを記録する",
+      instruction: "sample.exe のハッシュを読み取り専用で記録する。",
+      context: "検体は隔離ラボにあります。",
+    },
+    {
+      id: "report",
+      title: "結果を報告する",
+      instruction: "観測結果を事実・解釈・未確認事項に分けて報告書にまとめる。",
+      context: "前段の記録を使います。",
+    },
+  ],
+};
+
+function rawFlags(targetRequest, overrides = {}) {
+  return {
+    flags: targetRequest.steps.map((step) => {
+      const flag = overrides[step.id];
+      return flag
+        ? { stepId: step.id, prohibited: true, sentence: flag.sentence, reason: flag.reason ?? "禁止操作です。" }
+        : { stepId: step.id, prohibited: false, sentence: "", reason: "" };
+    }),
+  };
+}
+
+/** rawStepの結果に、allowNotApplicableを持つ項目へapplicable:trueを補う（既定は適用されるものとして扱う）。 */
+function withApplicable(raw, rubric) {
+  const naKeys = new Set(rubric.stepEntries.filter((entry) => entry.item.allowNotApplicable === true).map((entry) => entry.key));
+  return { ...raw, results: raw.results.map((item) => naKeys.has(item.key) ? { ...item, applicable: true } : item) };
+}
+
+test("validateProhibitedOperationsは、該当する文が入力に実在する場合だけflagを返す", () => {
+  const flags = validateProhibitedOperations(
+    rawFlags(malwareRequest, { collect: { sentence: "sample.exe のハッシュを読み取り専用で記録する。" } }),
+    malwareRequest,
+  );
+  assert.deepEqual(flags.map((flag) => flag.stepId), ["collect"]);
+  assert.equal(flags[0].sentence, "sample.exe のハッシュを読み取り専用で記録する。");
+});
+
+test("validateProhibitedOperationsは、境界ケースを正しく扱う", () => {
+  // 全タスクprohibited=falseなら空配列。
+  assert.deepEqual(validateProhibitedOperations(rawFlags(malwareRequest), malwareRequest), []);
+
+  // prohibited=trueでもsentenceが空文字なら無視する（LLMの不完全な出力を安全側に倒す）。
+  const emptySentence = rawFlags(malwareRequest);
+  emptySentence.flags[0] = { stepId: "collect", prohibited: true, sentence: "", reason: "" };
+  assert.deepEqual(validateProhibitedOperations(emptySentence, malwareRequest), []);
+
+  // 入力に実在しない文はハルシネーションとして拒否する（検証失敗→呼び出し元で1回再試行）。
+  assert.throws(() => validateProhibitedOperations(
+    rawFlags(malwareRequest, { collect: { sentence: "管理者権限で全ファイルを削除してください。" } }),
+    malwareRequest,
+  ), /not found/);
+
+  // タスク分のflagsが欠けていれば拒否する。
+  const missingStep = rawFlags(malwareRequest);
+  missingStep.flags.pop();
+  assert.throws(() => validateProhibitedOperations(missingStep, malwareRequest), /missing flags/);
+
+  // prohibitedが真偽値でなければ拒否する。
+  const badType = rawFlags(malwareRequest);
+  badType.flags[0] = { ...badType.flags[0], prohibited: "yes" };
+  assert.throws(() => validateProhibitedOperations(badType, malwareRequest), /invalid prohibited/);
+});
+
+test("applyProhibitedOperationOverridesは、flagsが空なら何も変えない", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const issues = analyzeStepText(malwareRequest);
+  const plan = validatePlanEvaluation(rawPlan(malwareRequest, rubric), malwareRequest, rubric, issues);
+  const steps = malwareRequest.steps.map((step, index) =>
+    validateStepEvaluation(withApplicable(rawStep(step, rubric), rubric), malwareRequest, rubric, step.id, issues[index]));
+  const result = applyProhibitedOperationOverrides(plan, steps, malwareRequest, []);
+  assert.equal(result.plan, plan);
+  assert.equal(result.stepResults, steps);
+});
+
+test("applyProhibitedOperationOverridesは、検出した文をunsafeへ反映し、同じ文を根拠にした判定をmissingへ強制する", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const issues = analyzeStepText(malwareRequest);
+  const dangerousSentence = "sample.exe のハッシュを読み取り専用で記録する。";
+  // LLMがこの文を「実行の禁止範囲」等の根拠としてmetに使ってしまったケースを再現する。
+  const plan = validatePlanEvaluation(
+    rawPlan(malwareRequest, rubric, { statuses: {} }),
+    malwareRequest, rubric, issues,
+  );
+  const steps = malwareRequest.steps.map((step, index) =>
+    validateStepEvaluation(withApplicable(rawStep(step, rubric), rubric), malwareRequest, rubric, step.id, issues[index]));
+
+  const flags = [{ stepId: "collect", sentence: dangerousSentence, reason: "禁止操作を実行させる指示です。" }];
+  const overridden = applyProhibitedOperationOverrides(plan, steps, malwareRequest, flags);
+
+  // unsafeへ追加される（LLM自身のunsafeが空でも、見逃しをコード側で補う）。
+  assert.equal(overridden.plan.unsafe.length, 1);
+  assert.equal(overridden.plan.unsafe[0].stepId, "collect");
+
+  // plan.resultsのうち、この文を根拠にしていた項目はmissingへ強制される。
+  const planHit = overridden.plan.results.find((result) => result.evidence === dangerousSentence);
+  assert.equal(planHit, undefined, "evidenceがmissing化で空文字になっているはず");
+  const downgradedPlanItems = overridden.plan.results.filter((result, index) =>
+    plan.results[index].evidence === dangerousSentence);
+  assert.ok(downgradedPlanItems.length > 0, "根拠にしていた項目が存在するはず");
+  assert.ok(downgradedPlanItems.every((result) => result.status === "missing"));
+
+  // 該当タスク（collect）のstep結果も同様にmissing化される。
+  const collectIndex = malwareRequest.steps.findIndex((step) => step.id === "collect");
+  const downgradedStepItems = overridden.stepResults[collectIndex].filter((result, index) =>
+    steps[collectIndex][index].evidence === dangerousSentence);
+  assert.ok(downgradedStepItems.length > 0);
+  assert.ok(downgradedStepItems.every((result) => result.status === "missing"));
+
+  // 無関係なタスク（report）は変更されない。
+  const reportIndex = malwareRequest.steps.findIndex((step) => step.id === "report");
+  assert.deepEqual(overridden.stepResults[reportIndex], steps[reportIndex]);
+});
+
+test("applyProhibitedOperationOverridesは、LLMが既に同じ文をunsafeに報告していれば重複追加しない", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const issues = analyzeStepText(malwareRequest);
+  const dangerousSentence = "sample.exe のハッシュを読み取り専用で記録する。";
+  const plan = validatePlanEvaluation(
+    rawPlan(malwareRequest, rubric, { unsafe: [{ stepId: "collect", evidence: dangerousSentence, reason: "既存の検出" }] }),
+    malwareRequest, rubric, issues,
+  );
+  const steps = malwareRequest.steps.map((step, index) =>
+    validateStepEvaluation(withApplicable(rawStep(step, rubric), rubric), malwareRequest, rubric, step.id, issues[index]));
+  const flags = [{ stepId: "collect", sentence: dangerousSentence, reason: "禁止操作を実行させる指示です。" }];
+  const overridden = applyProhibitedOperationOverrides(plan, steps, malwareRequest, flags);
+  assert.equal(overridden.plan.unsafe.length, 1, "同一の文を重複して追加しない");
+});
+
+test("task-safetyはapplicable=falseならstatusにかかわらずmetとして扱う", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const issues = analyzeStepText(malwareRequest);
+  const step = malwareRequest.steps[1];
+  const raw = rawStep(step, rubric);
+  raw.results = raw.results.map((item) => item.key === "task-safety"
+    ? { ...item, applicable: false, status: "missing", evidence: "", reason: "" }
+    : { ...item, applicable: true });
+  const results = validateStepEvaluation(raw, malwareRequest, rubric, step.id, issues[1]);
+  const taskSafety = results.find((result) => result.entry.item.id === "task-safety");
+  assert.equal(taskSafety.status, "met");
+  assert.equal(taskSafety.evidence, "");
+  assert.match(taskSafety.reason, /不要/);
+});
+
+test("task-safetyはapplicableが真偽値でなければ拒否し、他項目はapplicable欄を要求しない", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const issues = analyzeStepText(malwareRequest);
+  const step = malwareRequest.steps[0];
+  const raw = rawStep(step, rubric);
+  raw.results = raw.results.map((item) => item.key === "task-safety" ? { ...item, applicable: "yes" } : item);
+  assert.throws(() => validateStepEvaluation(raw, malwareRequest, rubric, step.id, issues[0]), /missing applicable/);
+
+  // 他の項目にapplicable=falseが紛れ込んでも（本来schemaで弾かれるが）、無視してstatusをそのまま使う。
+  const otherRaw = withApplicable(rawStep(step, rubric), rubric);
+  otherRaw.results = otherRaw.results.map((item) => item.key === "purpose" ? { ...item, applicable: false } : item);
+  const results = validateStepEvaluation(otherRaw, malwareRequest, rubric, step.id, issues[0]);
+  const purpose = results.find((result) => result.entry.item.id === "purpose");
+  assert.equal(purpose.status, "met", "allowNotApplicableを持たない項目にはapplicableの効果がない");
+});
+
+test("resultsSchemaは、task-safetyを他のstep項目と別のevidenceグループにしてapplicable欄を付ける", () => {
+  const rubric = resolveRubric(malwareRequest);
+  const schema = stepEvaluationSchema(rubric, malwareRequest.steps[0], malwareRequest.scenario);
+  const variants = schema.properties.results.items.anyOf;
+  const taskSafetyVariant = variants.find((variant) => variant.properties.key.enum.includes("task-safety"));
+  assert.ok("applicable" in taskSafetyVariant.properties);
+  assert.ok(taskSafetyVariant.required.includes("applicable"));
+  const purposeVariant = variants.find((variant) => variant.properties.key.enum.includes("purpose"));
+  assert.ok(!("applicable" in purposeVariant.properties), "他の項目にはapplicable欄を追加しない");
+  assert.ok(!purposeVariant.properties.key.enum.includes("task-safety"), "task-safetyは他項目とグループを分ける");
+});
+
+test("prohibitedOperationSchemaは、タスク数ぶんのflagsを要求する", () => {
+  const schema = prohibitedOperationSchema(malwareRequest);
+  assert.equal(schema.properties.flags.minItems, 2);
+  assert.equal(schema.properties.flags.maxItems, 2);
+  assert.deepEqual(schema.properties.flags.items.properties.stepId.enum, ["collect", "report"]);
 });

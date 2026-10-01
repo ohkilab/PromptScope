@@ -1,16 +1,27 @@
 /** Answers any evaluation call with every item met, using the grounded enums in the schema. */
 export function answerFromSchema(schema) {
+  // 禁止操作の検出呼び出しは、該当なし（すべてprohibited=false）で答える。
+  if (schema.properties.flags) {
+    const stepIds = schema.properties.flags.items.properties.stepId.enum;
+    return { flags: stepIds.map((stepId) => ({ stepId, prohibited: false, sentence: "", reason: "" })) };
+  }
   // 根拠の候補は軸ごとに分かれる（コンテキスト充足はコンテキスト欄だけ）。候補がない項目はmissingにする。
+  // allowNotApplicableの項目はmissingのvariantが複数あり得るため、missingは複数集める。
   const items = schema.properties.results.items;
   const variants = items.anyOf ?? [items];
-  const missing = variants.find((variant) => variant.properties.status.enum.includes("missing"));
-  const grounded = variants.filter((variant) => variant !== missing);
+  const missingVariants = variants.filter((variant) => variant.properties.status.enum.includes("missing"));
+  const grounded = variants.filter((variant) => !missingVariants.includes(variant));
+  const allKeys = [...new Set(variants.flatMap((variant) => variant.properties.key.enum))];
   const body = {
-    results: missing.properties.key.enum.map((key) => {
+    results: allKeys.map((key) => {
       const variant = grounded.find((candidate) => candidate.properties.key.enum.includes(key));
-      return variant
+      const withApplicable = variant
+        ? "applicable" in variant.properties
+        : missingVariants.some((candidate) => candidate.properties.key.enum.includes(key) && "applicable" in candidate.properties);
+      const base = variant
         ? { key, status: "met", evidence: variant.properties.evidence.enum[0], reason: "" }
         : { key, status: "missing", evidence: "", reason: "根拠がありません" };
+      return withApplicable ? { ...base, applicable: true } : base;
     }),
   };
   if (schema.properties.taskRoles) {
