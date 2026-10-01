@@ -21,6 +21,8 @@ export type RubricItem = {
   core: boolean;
   scope: RubricScope;
   kind: RubricItemKind;
+  /** タスクの性質上その対策が不要な場合、LLMにapplicable=falseを返させてmet扱いにする。 */
+  allowNotApplicable?: boolean;
 };
 
 export type ChecklistEntry = { id: string; label: string };
@@ -39,6 +41,8 @@ export const PASS_SCORE = 80;
 export const AXIS_MINIMUM = 12;
 export const STEP_AXIS_MINIMUM = 12;
 export const UNSAFE_CAP = 29;
+/** 禁止操作が検出された場合、安全性・権限境界の軸自体もこの点数まで下げる（総合29点と同じ比率、20点換算）。 */
+export const UNSAFE_AXIS_CAP = 5;
 export const STATUS_LABELS = { met: "充足", mostly: "おおむね", partial: "言及のみ", missing: "未充足" } as const;
 export type RubricStatus = keyof typeof STATUS_LABELS;
 /** 判定ごとの点数。充足=満点、おおむね=満点−1、言及のみ=満点の半分（切り捨て、最低1点）、未充足=0。 */
@@ -50,7 +54,7 @@ export function statusPoints(max: number, status: RubricStatus): number {
     case "missing": return 0;
   }
 }
-export const STEP_SCORED_CRITERIA = ["granularity", "context"] as const satisfies readonly CriterionId[];
+export const STEP_SCORED_CRITERIA = ["granularity", "context", "safety"] as const satisfies readonly CriterionId[];
 
 type ItemInput = Omit<RubricItem, "criterion" | "core" | "scope" | "kind"> &
   Partial<Pick<RubricItem, "core" | "scope" | "kind">>;
@@ -131,8 +135,7 @@ const RUBRICS: Record<RubricTypeId, TaskTypeRubric> = {
     ...axis("safety", [
       { id: "isolation", label: "隔離環境と通信遮断", description: "使い捨てVM、外部通信の遮断、非管理者権限での観測を指定する。", max: 5, core: true },
       { id: "execution-limits", label: "実行の禁止範囲", description: "ホストや本番での検体実行、外部への検体送信を禁止している。", max: 4, core: true },
-      { id: "approval-stop", label: "承認条件と停止条件", description: "動的観測を始める承認と、想定外の挙動での中断・報告先を示す。", max: 4 },
-      { id: "restore", label: "環境の復元と検体の管理", description: "スナップショットの破棄、原本を変更しないこと、誤実行の防止を示す。", max: 4 },
+      { id: "task-safety", label: "タスクごとの安全対策", description: "このタスクが行う操作に対応する安全対策（読み取り専用の徹底、承認を得てから開始すること、想定外の挙動での停止・報告、スナップショットの復元・原本保護、機密値の保護など、その操作に関係するもの）を、このタスクの指示に明記している。他のタスクの記述では代替できない。このタスクの指示に、要求される制約と矛盾する操作（許可されていない権限の使用、原本への直接操作、必要な隔離や通信遮断の解除など）が含まれる場合は、他に安全な記述があってもmissingとする（矛盾する操作の有無を安全な記述より優先して判定する）。このタスクの性質上、安全対策が不要な場合（検体へ直接操作しない報告・整理のみのタスクなど）はapplicableをfalseにする。", max: 8, core: true, scope: "step", allowNotApplicable: true },
       specific(3),
     ]),
     ...axis("verifiability", [
@@ -143,7 +146,7 @@ const RUBRICS: Record<RubricTypeId, TaskTypeRubric> = {
       specific(3),
     ]),
     ...axis("artifact", [
-      { id: "observation-table", label: "観測結果の表", description: "静的・動的の観測と、その対応を表にする形式と列を指定する。", max: 5 },
+      { id: "observation-table", label: "観測結果の対応付け", description: "静的観測と動的観測の対応関係が分かる形式（表・箇条書き・チェックリストなど、形式は問わない）と、含めるべき項目（観測内容・根拠・一致か不一致かなど）を指定する。", max: 5 },
       { id: "preservation-record", label: "保全記録", description: "ハッシュ、取得日時、コピーの識別などの記録項目を指定する。", max: 4 },
       { id: "fact-separation", label: "事実・解釈・未確認事項の区別", description: "報告の中で事実・解釈・未確認事項を分けて書くよう指示している。", max: 4 },
       { id: "delivery", label: "追加確認と共有先", description: "安全な次の確認と、誰に渡すかを示す。", max: 3 },

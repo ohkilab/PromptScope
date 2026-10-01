@@ -1,15 +1,19 @@
 import {
   analyzeStepText,
+  applyProhibitedOperationOverrides,
   planEvaluationSchema,
+  prohibitedOperationSchema,
   resolveRubric,
   scoreEvaluation,
   stepEvaluationSchema,
   validatePlanEvaluation,
+  validateProhibitedOperations,
   validateStepEvaluation,
   type AnalysisStep,
   type EvaluationProvider,
   type EvaluationRequest,
   type EvaluationResult,
+  type ProhibitedOperationFlag,
   type ResolvedRubric,
   type RubricEntry,
   type StepTextIssues,
@@ -325,6 +329,26 @@ APIで指定されたJSON Schemaに一致するJSONオブジェクトだけを�
   ];
 }
 
+/**
+ * 禁止操作の検出だけを行う単独の呼び出し。20項目の判定と同じ呼び出しに混ぜると、
+ * 複雑な判断の中で結論を急ぎ、命令文自体を遵守の根拠として誤判定することがあるため分離する。
+ */
+function prohibitedOperationMessages(request: EvaluationRequest): ChatMessage[] {
+  const systemPrompt = `${EVALUATOR_ROLE}
+次の役割だけを行います。各タスクの指示・コンテキストの文の中に、演習で禁止されている操作（本番・ホストでの実行、許可範囲外へのアクセス、破壊的な操作、秘密値の復元や外部送信など）を、Agentに実行するよう明示的に指示している文がないか確認してください。
+禁止・否定する文、引用・例示、仮説、承認後に行う計画は該当しません。危険な語があるだけでは該当しません。
+該当する文があるタスクはprohibited=trueにし、sentenceにその文を入力からそのまま複写してください。該当がなければprohibited=falseにし、sentenceは空文字にします。
+すべてのタスクについて1件ずつ判定してください。`;
+  const userPrompt = `次の各タスクを確認してください:
+${JSON.stringify({ steps: request.steps.map((step, index) => ({ number: index + 1, id: step.id, title: step.title, instruction: step.instruction, context: step.context })) }, null, 2)}
+
+APIで指定されたJSON Schemaに一致するJSONオブジェクトだけを返してください。`;
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+}
+
 function parseJsonContent(content: unknown): unknown {
   if (typeof content !== "string" || content.trim().length === 0) {
     throw new EvaluationServiceError(502, "LLMから結果を取得できませんでした。");
@@ -617,6 +641,15 @@ export async function evaluatePlanWithLlm(request: EvaluationRequest, signal?: A
     (raw) => validatePlanEvaluation(raw, request, rubric, issues),
     callSignal,
   );
+  // 禁止操作の検出は、20項目の判定と同じ呼び出しに混ぜず単独で行う（詳細はprohibitedOperationMessagesを参照）。
+  const prohibitedCall = () => evaluationCall(
+    config,
+    "prohibited_operations",
+    prohibitedOperationMessages(request),
+    prohibitedOperationSchema(request),
+    (raw) => validateProhibitedOperations(raw, request),
+    callSignal,
+  );
   const stepCalls = request.steps.map((step, index) => () => evaluationCall(
     config,
     `step_evaluation_${index + 1}`,
@@ -627,11 +660,12 @@ export async function evaluatePlanWithLlm(request: EvaluationRequest, signal?: A
   ));
 
   try {
-    const [plan, ...stepResults] = await runWithConcurrency<unknown>(
-      [planCall, ...stepCalls],
+    const [plan, flags, ...stepResults] = await runWithConcurrency<unknown>(
+      [planCall, prohibitedCall, ...stepCalls],
       evaluationConcurrency(config.provider),
-    ) as [ValidatedPlanEvaluation, ...ValidatedResult[][]];
-    return scoreEvaluation(request, rubric, stepResults, plan, config.provider, config.model);
+    ) as [ValidatedPlanEvaluation, ProhibitedOperationFlag[], ...ValidatedResult[][]];
+    const overridden = applyProhibitedOperationOverrides(plan, stepResults, request, flags);
+    return scoreEvaluation(request, rubric, overridden.stepResults, overridden.plan, config.provider, config.model);
   } catch (error) {
     controller.abort();
     if (signal?.aborted) throw new EvaluationServiceError(499, "操作がキャンセルされました。", { cause: error });

@@ -41,10 +41,12 @@ test("タスクごとの判定と計画全体の判定を別々の呼び出し�
     return ollamaResponse(JSON.stringify(answerFromSchema(body.format)));
   }, () => withOllamaEnvironment({}, () => evaluatePlanWithLlm(request)));
 
-  assert.equal(bodies.length, request.steps.length + 1);
+  assert.equal(bodies.length, request.steps.length + 2);
   const planBodies = bodies.filter((body) => body.format.properties.taskRoles);
-  const stepBodies = bodies.filter((body) => !body.format.properties.taskRoles);
+  const prohibitedBodies = bodies.filter((body) => body.format.properties.flags);
+  const stepBodies = bodies.filter((body) => !body.format.properties.taskRoles && !body.format.properties.flags);
   assert.equal(planBodies.length, 1);
+  assert.equal(prohibitedBodies.length, 1);
   assert.equal(stepBodies.length, 2);
   for (const body of bodies) {
     assert.equal(body.think, false);
@@ -95,7 +97,7 @@ test("検証に失敗した呼び出しだけを1回再試行する", async () =
     return ollamaResponse(JSON.stringify(answerFromSchema(body.format)));
   }, () => withOllamaEnvironment({}, () => evaluatePlanWithLlm(request)));
 
-  assert.equal(calls, request.steps.length + 2);
+  assert.equal(calls, request.steps.length + 3);
   assert.equal(result.total, 100);
 });
 
@@ -121,7 +123,7 @@ test("同時に送る呼び出し数をEVALUATION_CONCURRENCYで制限する", a
       inFlight -= 1;
       return ollamaResponse(JSON.stringify(answerFromSchema(JSON.parse(init.body).format)));
     }, () => withOllamaEnvironment({ EVALUATION_CONCURRENCY: limit }, () => evaluatePlanWithLlm(manySteps)));
-    assert.equal(calls, 6);
+    assert.equal(calls, 7);
     assert.equal(maxInFlight, expectedMax, `limit ${limit}`);
   }
 });

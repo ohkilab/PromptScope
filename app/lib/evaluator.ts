@@ -8,6 +8,7 @@ import {
   STATUS_LABELS,
   STEP_AXIS_MINIMUM,
   STEP_SCORED_CRITERIA,
+  UNSAFE_AXIS_CAP,
   UNSAFE_CAP,
   planItems,
   rubricFor,
@@ -328,7 +329,21 @@ function evidenceTexts(entry: RubricEntry, steps: AnalysisStep[], scenario: Scen
 
 function resultsSchema(entries: RubricEntry[], steps: AnalysisStep[], scenario: Scenario) {
   const reason = { type: "string", maxLength: REASON_MAX_LENGTH };
-  const variant = (keys: string[], statuses: RubricStatus[], evidenceOptions: string[]) => ({
+  // allowNotApplicableの項目は他と別グループなので、このグループに限りreasonをstatusより先に
+  // 生成させる（自己回帰生成では後のトークンが前を参照できるため、矛盾の検討を先に書かせてから
+  // 結論を書かせる）。他の項目は従来通りstatusを先にする（全項目に広げると副作用が大きいため）。
+  const variant = (keys: string[], statuses: RubricStatus[], evidenceOptions: string[], withApplicable: boolean) => withApplicable ? {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      key: { type: "string", enum: keys },
+      applicable: { type: "boolean" },
+      reason,
+      evidence: { type: "string", enum: evidenceOptions },
+      status: { type: "string", enum: statuses },
+    },
+    required: ["key", "applicable", "reason", "evidence", "status"],
+  } : {
     type: "object",
     additionalProperties: false,
     properties: {
@@ -338,26 +353,33 @@ function resultsSchema(entries: RubricEntry[], steps: AnalysisStep[], scenario: 
       reason,
     },
     required: ["key", "status", "evidence", "reason"],
-  });
+  };
   // 根拠の候補が同じ項目をまとめ、missing以外では候補からの選択をSchemaで必須にする
   // （小さいモデルは根拠を空にしがちなため）。候補が1文もない項目はmissingしか選べない。
-  const groups = new Map<string, { keys: string[]; evidence: string[] }>();
+  // allowNotApplicableの項目は、根拠の候補が同じでも他項目と別グループにし、applicable欄を追加する。
+  const groups = new Map<string, { keys: string[]; evidence: string[]; withApplicable: boolean }>();
   for (const entry of entries) {
     const evidence = sentenceOptions(evidenceTexts(entry, steps, scenario));
-    const id = JSON.stringify(evidence);
-    const group = groups.get(id) ?? { keys: [], evidence };
+    const withApplicable = entry.item.allowNotApplicable === true;
+    const id = `${withApplicable ? "na:" : "std:"}${JSON.stringify(evidence)}`;
+    const group = groups.get(id) ?? { keys: [], evidence, withApplicable };
     group.keys.push(entry.key);
     groups.set(id, group);
   }
-  const grounded = [...groups.values()]
-    .filter((group) => group.evidence.length > 0)
-    .map((group) => variant(group.keys, ["met", "mostly", "partial"], group.evidence));
-  const missing = variant(entries.map((entry) => entry.key), ["missing"], [""]);
+  const stdKeys = entries.filter((entry) => entry.item.allowNotApplicable !== true).map((entry) => entry.key);
+  const naKeys = entries.filter((entry) => entry.item.allowNotApplicable === true).map((entry) => entry.key);
+  const variants = [
+    ...[...groups.values()]
+      .filter((group) => group.evidence.length > 0)
+      .map((group) => variant(group.keys, ["met", "mostly", "partial"], group.evidence, group.withApplicable)),
+    ...(stdKeys.length > 0 ? [variant(stdKeys, ["missing"], [""], false)] : []),
+    ...(naKeys.length > 0 ? [variant(naKeys, ["missing"], [""], true)] : []),
+  ];
   return {
     type: "array",
     minItems: entries.length,
     maxItems: entries.length,
-    items: grounded.length > 0 ? { anyOf: [...grounded, missing] } : missing,
+    items: variants.length === 1 ? variants[0] : { anyOf: variants },
   };
 }
 
@@ -439,8 +461,15 @@ function capStatus(status: RubricStatus, cap: RubricStatus): RubricStatus {
   return STATUS_ORDER.indexOf(status) > STATUS_ORDER.indexOf(cap) ? cap : status;
 }
 
+// 小さいモデルは具体的な不足点のあとに「〜ため不十分である」のような無内容な結びを付け足し、
+// 別項目の理由でも同じ結びが繰り返されて定型文に見える。結びだけを削り、具体的な部分を残す。
+const REDUNDANT_VERDICT = /(?:[、。,]\s*)?(?:これにより)?(?:要件を(?:完全に)?)?(?:満たして(?:い)?ない|不十分(?:である)?|不足している|十分ではない|適切ではない)\s*。?\s*$/u;
+
 function shortReason(value: unknown): string {
-  return typeof value === "string" ? value.trim().slice(0, REASON_MAX_LENGTH) : "";
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  const stripped = trimmed.replace(REDUNDANT_VERDICT, "").trim();
+  return (stripped || trimmed).slice(0, REASON_MAX_LENGTH);
 }
 
 function validateResults(
@@ -458,6 +487,14 @@ function validateResults(
   return entries.map((entry) => {
     const raw = byKey.get(entry.key);
     if (!raw) throw new Error(`LLM response is missing ${scope} result for ${entry.key}.`);
+    if (entry.item.allowNotApplicable === true) {
+      if (typeof raw.applicable !== "boolean") throw new Error(`LLM response is missing applicable for ${scope} ${entry.key}.`);
+      // このタスクの性質上、対策が不要とLLMが判断した場合は、statusにかかわらずmetとして扱う
+      // （「不要」を「missing」と取り違える誤判定を防ぐ）。
+      if (raw.applicable === false) {
+        return { entry, status: "met" as const, evidence: "", reason: shortReason(raw.reason) || "このタスクの性質上、対策は不要と判断されました。" };
+      }
+    }
     const status = raw.status;
     if (typeof status !== "string" || !(status in STATUS_LABELS)) {
       throw new Error(`LLM response has an invalid status for ${scope} ${entry.key}.`);
@@ -562,6 +599,112 @@ export function validatePlanEvaluation(
       .slice(0, 3).map((item) => item.trim().slice(0, REASON_MAX_LENGTH))
     : [];
   return { results, taskRoles, unsafe, strengths };
+}
+
+// ---------------------------------------------------------------------------
+// 禁止操作の検出（計画全体の20項目などと同時に判定させず、単独の呼び出しで判定する）
+// ---------------------------------------------------------------------------
+
+export type ProhibitedOperationFlag = { stepId: string; sentence: string; reason: string };
+
+export function prohibitedOperationSchema(request: EvaluationRequest) {
+  const stepIds = request.steps.map((step) => step.id);
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      flags: {
+        type: "array",
+        minItems: stepIds.length,
+        maxItems: stepIds.length,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            stepId: { type: "string", enum: stepIds },
+            prohibited: { type: "boolean" },
+            sentence: { type: "string", maxLength: 400 },
+            reason: { type: "string", maxLength: REASON_MAX_LENGTH },
+          },
+          required: ["stepId", "prohibited", "sentence", "reason"],
+        },
+      },
+    },
+    required: ["flags"],
+  };
+}
+
+// 「DoS」のような英字混じりの語の前後に、モデルが複写時だけ空白を挿入することがある
+// （例：「対象サービスへDoS攻撃」→「対象サービスへ DoS 攻撃」）。この検証は完全一致を要求する
+// ため、空白の有無だけの差で誤ってハルシネーション扱いにしないよう、空白を詰めてから比較する。
+function tightText(value: string): string {
+  return normalizedText(value).replace(/\s+/gu, "");
+}
+
+export function validateProhibitedOperations(value: unknown, request: EvaluationRequest): ProhibitedOperationFlag[] {
+  if (!isRecord(value) || !Array.isArray(value.flags)) throw new Error("LLM response is missing flags.");
+  const byStep = new Map<string, UnknownRecord>();
+  for (const raw of value.flags) {
+    if (isRecord(raw) && typeof raw.stepId === "string" && !byStep.has(raw.stepId)) byStep.set(raw.stepId, raw);
+  }
+  const flags: ProhibitedOperationFlag[] = [];
+  for (const step of request.steps) {
+    const raw = byStep.get(step.id);
+    if (!raw) throw new Error(`LLM response is missing flags for ${step.id}.`);
+    if (typeof raw.prohibited !== "boolean") throw new Error(`LLM response has an invalid prohibited for ${step.id}.`);
+    if (!raw.prohibited) continue;
+    const sentence = typeof raw.sentence === "string" ? raw.sentence.trim() : "";
+    if (!sentence) continue;
+    const found = [step.title, step.instruction, step.context]
+      .some((source) => tightText(source).includes(tightText(sentence)));
+    if (!found) throw new Error(`LLM response has a prohibited sentence not found in task ${step.id}.`);
+    flags.push({ stepId: step.id, sentence, reason: shortReason(raw.reason) || "禁止操作を実行させる指示です。" });
+  }
+  return flags;
+}
+
+/**
+ * 検出した禁止操作の文を、1) unsafeへ反映し（LLMが見逃していても確実にcapがかかるようにする）、
+ * 2) その文を根拠に使っているplan/step双方の判定をmissingへ強制する（禁止操作の文を遵守の根拠にさせない）。
+ */
+export function applyProhibitedOperationOverrides(
+  plan: ValidatedPlanEvaluation,
+  stepResults: ValidatedResult[][],
+  request: EvaluationRequest,
+  flags: ProhibitedOperationFlag[],
+): { plan: ValidatedPlanEvaluation; stepResults: ValidatedResult[][] } {
+  if (flags.length === 0) return { plan, stepResults };
+
+  const unsafe = [...plan.unsafe];
+  for (const flag of flags) {
+    const tightSentence = tightText(flag.sentence);
+    const alreadyReported = unsafe.some((item) => item.stepId === flag.stepId && tightText(item.evidence).includes(tightSentence));
+    if (!alreadyReported) unsafe.push({ stepId: flag.stepId, evidence: flag.sentence, reason: flag.reason });
+  }
+
+  const downgrade = (result: ValidatedResult): ValidatedResult => {
+    const matches = flags.some((flag) => result.evidence && tightText(result.evidence).includes(tightText(flag.sentence)));
+    if (!matches) return result;
+    return { ...result, status: "missing", evidence: "", reason: "禁止操作を指示する文のため、この項目を満たす根拠にはできません。" };
+  };
+
+  return {
+    plan: { ...plan, unsafe, results: plan.results.map(downgrade) },
+    stepResults: stepResults.map((results, index) => {
+      const stepId = request.steps[index].id;
+      const relevant = flags.some((flag) => flag.stepId === stepId);
+      if (!relevant) return results;
+      return results.map((result) => {
+        // 禁止操作が検出されたタスクは、根拠の一致にかかわらずそのタスクの安全性項目を無条件でmissingにする。
+        // LLMが同じタスク内の別の（安全な）文を根拠に選び、危険な文を見逃すことがあるため、
+        // 根拠一致だけに頼らずタスク単位で判定する。
+        if (result.entry.item.criterion === "safety") {
+          return { ...result, status: "missing" as const, evidence: "", reason: "このタスクに禁止操作を指示する文が含まれているため、安全性の項目を満たせません。" };
+        }
+        return downgrade(result);
+      });
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -727,13 +870,20 @@ export function scoreEvaluation(
       };
     });
 
-    const score = subcriteria.reduce((sum, item) => sum + item.score, 0);
+    const rawScore = subcriteria.reduce((sum, item) => sum + item.score, 0);
+    // 禁止操作が検出された計画は、各項目の判定とは別に安全性の軸自体も上限を設ける
+    // （総合点だけが29点に制限されても、安全性・権限境界の表示が高いままでは矛盾して見えるため）。
+    const unsafeCapped = spec.id === "safety" && plan.unsafe.length > 0 && rawScore > UNSAFE_AXIS_CAP;
+    const score = unsafeCapped ? UNSAFE_AXIS_CAP : rawScore;
+    const message = unsafeCapped
+      ? `禁止操作を実行させる指示があるため、上限${UNSAFE_AXIS_CAP}点に制限しています。${subcriteria.map((item) => `${item.label}${item.score}/${item.max}`).join("、")}。`
+      : `${subcriteria.map((item) => `${item.label}${item.score}/${item.max}`).join("、")}。`;
     return {
       id: spec.id,
       label: spec.label,
       score,
       max: spec.max,
-      message: `${subcriteria.map((item) => `${item.label}${item.score}/${item.max}`).join("、")}。`,
+      message,
       subcriteria,
       ...(stepDetails.length > 0 ? { stepDetails } : {}),
       ...(findings.length > 0 ? { findings } : {}),
